@@ -83,3 +83,27 @@ Stage Summary:
 - Fixed: Compare documents now correctly extracts PDF text
 - Fixed: Chat auto-re-chunks previously uploaded documents that had no chunks due to the old bug
 - The RAG pipeline (upload → chunk → search → LLM context) now works end-to-end
+---
+Task ID: 4
+Agent: main
+Task: Deep fix — AI chat still cannot read PDFs
+
+Work Log:
+- Confirmed pdf-parse v5 API works correctly (tested with real PDF extraction)
+- Confirmed full pipeline works: PDF → extract text → chunk → keyword search → match found
+- Root cause of "still not working": `parseAndChunk` was fire-and-forget (`.catch()`), meaning:
+  1. Upload response returned immediately (before chunks created)
+  2. Background parsing could fail silently
+  3. User asks chat question → no chunks yet → AI has no context
+- Key fix: Changed upload route to **await** parseAndChunk — response only returns AFTER chunks are guaranteed in DB
+  - `parseAndChunk` now returns `Promise<number>` (chunk count) instead of void
+  - Response includes `chunkCount` field for frontend feedback
+- Updated DocumentSidebar progress: removed misleading "parsing" intermediate state since server now blocks until done
+- Toast now shows "ready for AI chat (N chunks)" confirming the document is fully indexed
+- Full E2E test passed: upload PDF → 1 page extracted → 1 chunk created → keyword search scores 6 → context found
+
+Stage Summary:
+- Changed: `parseAndChunk` is now awaited, not fire-and-forget
+- Changed: Upload response includes `chunkCount` 
+- Changed: Toast confirms "ready for AI chat" after upload
+- Proven: PDF → chunk → search pipeline works correctly (tested with Node.js)

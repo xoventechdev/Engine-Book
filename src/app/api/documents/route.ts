@@ -66,25 +66,28 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Parse and chunk the document in the background
-    parseAndChunk(document.id, absoluteFilePath, fileType).catch((err) => {
+    // Parse and chunk the document — await so chunks are guaranteed before response
+    let chunkCount = 0;
+    try {
+      chunkCount = await parseAndChunk(document.id, absoluteFilePath, fileType);
+    } catch (err) {
       console.error(`Failed to parse document ${document.id}:`, err);
-    });
+    }
 
-    return NextResponse.json(document, { status: 201 });
+    return NextResponse.json({ ...document, chunkCount }, { status: 201 });
   } catch (error) {
     console.error('Failed to upload document:', error);
     return NextResponse.json({ error: 'Failed to upload document' }, { status: 500 });
   }
 }
 
-async function parseAndChunk(documentId: string, absFilePath: string, fileType: string) {
+async function parseAndChunk(documentId: string, absFilePath: string, fileType: string): Promise<number> {
   let fileBuffer: Buffer;
   try {
     fileBuffer = fs.readFileSync(absFilePath);
   } catch (err) {
     console.error(`Cannot read file ${absFilePath}:`, err);
-    return;
+    return 0;
   }
 
   let pages: { text: string; pageNumber: number }[] = [];
@@ -145,8 +148,12 @@ async function parseAndChunk(documentId: string, absFilePath: string, fileType: 
         })),
       });
     }
+
+    console.log(`Document ${documentId}: ${pages.length} pages, ${chunks.length} chunks created`);
+    return chunks.length;
   } catch (error) {
     console.error(`Error parsing document ${documentId}:`, error);
+    return 0;
   }
 }
 

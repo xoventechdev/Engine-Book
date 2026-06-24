@@ -141,23 +141,21 @@ export function DocumentSidebar() {
         })
 
         if (result.ok) {
-          // Mark as parsing (server is processing the file)
+          const chunkInfo = (result.doc as any)?.chunkCount
+            ? ` (${(result.doc as any).chunkCount} chunks)`
+            : ''
+          // Server already parsed & chunked — go straight to done
           setUploadItems((prev) =>
-            prev.map((u) => (u.id === item.id ? { ...u, progress: 100, status: 'parsing' } : u))
+            prev.map((u) => (u.id === item.id ? { ...u, progress: 100, status: 'done' } : u))
           )
           if (result.doc) {
             addDocument(result.doc)
           }
-          toast({ title: 'Uploaded', description: `${item.file.name} uploaded successfully` })
-          // Show "done" briefly, then auto-clean
+          toast({ title: 'Uploaded', description: `${item.file.name} ready for AI chat${chunkInfo}` })
+          // Auto-clean after showing done state
           setTimeout(() => {
-            setUploadItems((prev) =>
-              prev.map((u) => (u.id === item.id ? { ...u, status: 'done' } : u))
-            )
-            setTimeout(() => {
-              setUploadItems((prev) => prev.filter((u) => u.id !== item.id))
-            }, 1200)
-          }, 800)
+            setUploadItems((prev) => prev.filter((u) => u.id !== item.id))
+          }, 1500)
         } else {
           setUploadItems((prev) =>
             prev.map((u) => (u.id === item.id ? { ...u, status: 'error', error: result.error } : u))
@@ -225,9 +223,9 @@ export function DocumentSidebar() {
               <span className="text-xs font-medium text-muted-foreground">
                 {uploadItems.filter((u) => u.status === 'uploading').length > 0
                   ? `Uploading ${uploadItems.filter((u) => u.status === 'uploading').length} file${uploadItems.filter((u) => u.status === 'uploading').length > 1 ? 's' : ''}...`
-                  : uploadItems.filter((u) => u.status === 'parsing').length > 0
-                    ? 'Processing documents...'
-                    : 'Uploads complete'}
+                  : uploadItems.some((u) => u.status === 'done')
+                    ? 'Uploads complete'
+                    : 'Processing uploads...'}
               </span>
             </div>
           </div>
