@@ -1,0 +1,25 @@
+# Chiller Plant Specification
+## Model: York YKFCPT 2500
+- Rated Cooling Capacity: 879 kW (250 TR)
+- Power Supply: 400V, 3-phase, 50Hz
+- Refrigerant: R-134a
+- Compressor Type: Centrifugal
+- COP: 5.8 at full load
+## BACnet Integration Points
+- AI-1: Chiller Status (On/Off)
+- AI-2: Supply Water Temperature
+- AI-3: Return Water Temperature
+- AI-4: Compressor Current
+- AO-1: Chiller Capacity Setpoint (0-100%)
+- BO-1: Chiller Start/Stop Command
+- BI-1: Chiller Fault Status
+- BI-2: High Pressure Alarm
+- BI-3: Low Temperature Alarm
+## Startup Requirements
+1. Verify power supply voltage (400V +/-5%)
+2. Check refrigerant charge level
+3. Confirm flow switch operation
+4. Set capacity setpoint to 30% minimum
+5. Enable chiller via BMS start command
+## Location: Mechanical Room Level B2, Zone A
+## Standard Compliance: ASHRAE 90.1-2019

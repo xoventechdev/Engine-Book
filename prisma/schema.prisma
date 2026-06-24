@@ -1,0 +1,83 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String     @id @default(cuid())
+  name        String
+  description String?
+  discipline  String     @default("General")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  documents   Document[]
+  chatMessages ChatMessage[]
+  annotations Annotation[]
+  outputs     GeneratedOutput[]
+}
+
+model Document {
+  id           String     @id @default(cuid())
+  projectId    String
+  filename     String
+  fileType     String     // pdf, docx, txt, xlsx, csv
+  fileSize     Int
+  filePath     String
+  discipline   String     @default("General")
+  uploadedAt   DateTime   @default(now())
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chunks       DocumentChunk[]
+}
+
+model DocumentChunk {
+  id         String   @id @default(cuid())
+  documentId String
+  chunkIndex Int
+  pageNumber Int?
+  text       String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  projectId String
+  role      String   // user, assistant
+  content   String
+  citations String?  // JSON array of citations
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model Annotation {
+  id         String   @id @default(cuid())
+  documentId String
+  projectId  String
+  pageNumber Int?
+  selectedText String
+  note       String?
+  color      String   @default("#FFEB3B")
+  createdAt  DateTime @default(now())
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+}
+
+model GeneratedOutput {
+  id         String   @id @default(cuid())
+  projectId  String
+  outputType String   // commissioning_checklist, equipment_schedule, handover_report, data_extraction
+  title      String
+  content    String
+  createdAt  DateTime @default(now())
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}

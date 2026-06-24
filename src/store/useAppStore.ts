@@ -1,0 +1,153 @@
+import { create } from 'zustand';
+
+// ========== Types ==========
+
+export type Discipline = 'BMS' | 'HVAC' | 'Electrical' | 'Fire Alarm' | 'Structural' | 'Civil' | 'MEP' | 'General';
+
+export type ViewMode = 'dashboard' | 'workspace' | 'graph' | 'compare' | 'report';
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  discipline: string;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { documents: number };
+}
+
+export interface Document {
+  id: string;
+  projectId: string;
+  filename: string;
+  fileType: string;
+  fileSize: number;
+  discipline: string;
+  uploadedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  projectId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  citations: Citation[] | null;
+  createdAt: string;
+}
+
+export interface Citation {
+  documentName: string;
+  page?: number;
+  text?: string;
+}
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: 'Equipment' | 'Spec' | 'Standard' | 'Location' | 'Value';
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  relation: string;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+// ========== App Store ==========
+
+interface AppState {
+  // Navigation
+  viewMode: ViewMode;
+  setViewMode: (mode: ViewMode) => void;
+
+  // Current Project
+  currentProject: Project | null;
+  setCurrentProject: (project: Project | null) => void;
+
+  // Documents
+  documents: Document[];
+  setDocuments: (docs: Document[]) => void;
+  addDocument: (doc: Document) => void;
+  removeDocument: (id: string) => void;
+
+  // Selected document for viewing
+  selectedDocumentId: string | null;
+  setSelectedDocumentId: (id: string | null) => void;
+
+  // Chat
+  chatMessages: ChatMessage[];
+  setChatMessages: (messages: ChatMessage[]) => void;
+  addChatMessage: (message: ChatMessage) => void;
+  clearChatMessages: () => void;
+  isChatLoading: boolean;
+  setChatLoading: (loading: boolean) => void;
+
+  // Discipline filter
+  disciplineFilter: Discipline | 'All';
+  setDisciplineFilter: (filter: Discipline | 'All') => void;
+
+  // Graph
+  graphData: GraphData | null;
+  setGraphData: (data: GraphData | null) => void;
+
+  // Compare
+  compareDocumentIds: [string | null, string | null];
+  setCompareDocumentIds: (ids: [string | null, string | null]) => void;
+
+  // UI State
+  sidebarOpen: boolean;
+  setSidebarOpen: (open: boolean) => void;
+  chatOpen: boolean;
+  setChatOpen: (open: boolean) => void;
+}
+
+export const useAppStore = create<AppState>((set) => ({
+  // Navigation
+  viewMode: 'dashboard',
+  setViewMode: (mode) => set({ viewMode: mode }),
+
+  // Current Project
+  currentProject: null,
+  setCurrentProject: (project) => set({ currentProject: project }),
+
+  // Documents
+  documents: [],
+  setDocuments: (docs) => set({ documents: docs }),
+  addDocument: (doc) => set((state) => ({ documents: [...state.documents, doc] })),
+  removeDocument: (id) => set((state) => ({ documents: state.documents.filter(d => d.id !== id) })),
+
+  // Selected document
+  selectedDocumentId: null,
+  setSelectedDocumentId: (id) => set({ selectedDocumentId: id }),
+
+  // Chat
+  chatMessages: [],
+  setChatMessages: (messages) => set({ chatMessages: messages }),
+  addChatMessage: (message) => set((state) => ({ chatMessages: [...state.chatMessages, message] })),
+  clearChatMessages: () => set({ chatMessages: [] }),
+  isChatLoading: false,
+  setChatLoading: (loading) => set({ isChatLoading: loading }),
+
+  // Discipline filter
+  disciplineFilter: 'All',
+  setDisciplineFilter: (filter) => set({ disciplineFilter: filter }),
+
+  // Graph
+  graphData: null,
+  setGraphData: (data) => set({ graphData: data }),
+
+  // Compare
+  compareDocumentIds: [null, null],
+  setCompareDocumentIds: (ids) => set({ compareDocumentIds: ids }),
+
+  // UI State
+  sidebarOpen: true,
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  chatOpen: true,
+  setChatOpen: (open) => set({ chatOpen: open }),
+}));
