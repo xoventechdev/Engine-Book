@@ -1,14 +1,15 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useAppStore, type Document, type Discipline } from '@/store/useAppStore'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
 import { DropZone } from '@/components/upload/DropZone'
 import { formatFileSize, getDisciplineColor, DISCIPLINES, getFileType } from '@/lib/helpers'
 import { useToast } from '@/hooks/use-toast'
-import { FileText, FileSpreadsheet, FileType, Trash2, Upload, Filter } from 'lucide-react'
+import { FileText, FileSpreadsheet, FileType, Trash2, Upload, Filter, CheckCircle2, AlertCircle, X, Loader2 } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -17,6 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 
 const FILE_ICONS: Record<string, typeof FileText> = {
   pdf: FileText,
@@ -24,6 +26,14 @@ const FILE_ICONS: Record<string, typeof FileText> = {
   txt: FileText,
   xlsx: FileSpreadsheet,
   csv: FileSpreadsheet,
+}
+
+interface UploadItem {
+  id: string
+  file: File
+  progress: number
+  status: 'uploading' | 'parsing' | 'done' | 'error'
+  error?: string
 }
 
 export function DocumentSidebar() {
@@ -39,8 +49,10 @@ export function DocumentSidebar() {
     setDisciplineFilter,
   } = useAppStore()
   const [uploading, setUploading] = useState(false)
+  const [uploadItems, setUploadItems] = useState<UploadItem[]>([])
   const [loading, setLoading] = useState(true)
   const { toast } = useToast()
+  const abortControllersRef = useRef<Map<string, XMLHttpRequest>>(new Map())
 
   const projectId = currentProject?.id
 
@@ -66,32 +78,122 @@ export function DocumentSidebar() {
     if (!projectId) return
     setUploading(true)
 
-    for (const file of files) {
+    const items: UploadItem[] = files.map((file, i) => ({
+      id: `${Date.now()}-${i}`,
+      file,
+      progress: 0,
+      status: 'uploading' as const,
+    }))
+    setUploadItems((prev) => [...prev, ...items])
+
+    for (const item of items) {
       try {
         const formData = new FormData()
-        formData.append('file', file)
+        formData.append('file', item.file)
         formData.append('projectId', projectId)
         formData.append('discipline', currentProject?.discipline || 'General')
 
-        const res = await fetch('/api/documents', {
-          method: 'POST',
-          body: formData,
+        const result = await new Promise<{ ok: boolean; doc?: Document; error?: string }>((resolve) => {
+          const xhr = new XMLHttpRequest()
+          abortControllersRef.current.set(item.id, xhr)
+
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 100)
+              setUploadItems((prev) =>
+                prev.map((u) => (u.id === item.id ? { ...u, progress: Math.min(pct, 99) } : u))
+              )
+            }
+          })
+
+          xhr.addEventListener('load', () => {
+            abortControllersRef.current.delete(item.id)
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                const doc = JSON.parse(xhr.responseText)
+                resolve({ ok: true, doc })
+              } catch {
+                resolve({ ok: true })
+              }
+            } else {
+              try {
+                const err = JSON.parse(xhr.responseText)
+                resolve({ ok: false, error: err.error || `Upload failed (${xhr.status})` })
+              } catch {
+                resolve({ ok: false, error: `Upload failed (${xhr.status})` })
+              }
+            }
+          })
+
+          xhr.addEventListener('error', () => {
+            abortControllersRef.current.delete(item.id)
+            resolve({ ok: false, error: 'Network error' })
+          })
+
+          xhr.addEventListener('abort', () => {
+            abortControllersRef.current.delete(item.id)
+            resolve({ ok: false, error: 'Cancelled' })
+          })
+
+          xhr.open('POST', '/api/documents')
+          xhr.send(formData)
         })
 
-        if (res.ok) {
-          const doc = await res.json()
-          addDocument(doc)
-          toast({ title: 'Uploaded', description: `${file.name} uploaded successfully` })
+        if (result.ok) {
+          // Mark as parsing (server is processing the file)
+          setUploadItems((prev) =>
+            prev.map((u) => (u.id === item.id ? { ...u, progress: 100, status: 'parsing' } : u))
+          )
+          if (result.doc) {
+            addDocument(result.doc)
+          }
+          toast({ title: 'Uploaded', description: `${item.file.name} uploaded successfully` })
+          // Remove after a short delay to show "done" state
+          setTimeout(() => {
+            setUploadItems((prev) =>
+              prev.map((u) => (u.id === item.id ? { ...u, status: 'done' } : u))
+            )
+            setTimeout(() => {
+              setUploadItems((prev) => prev.filter((u) => u.id !== item.id))
+            }, 1200)
+          }, 800)
         } else {
-          const err = await res.json()
-          toast({ title: 'Upload Error', description: err.error || `Failed to upload ${file.name}`, variant: 'destructive' })
+          setUploadItems((prev) =>
+            prev.map((u) => (u.id === item.id ? { ...u, status: 'error', error: result.error } : u))
+          )
+          toast({ title: 'Upload Error', description: result.error || `Failed to upload ${item.file.name}`, variant: 'destructive' })
+          setTimeout(() => {
+            setUploadItems((prev) => prev.filter((u) => u.id !== item.id))
+          }, 4000)
         }
       } catch {
-        toast({ title: 'Error', description: `Failed to upload ${file.name}`, variant: 'destructive' })
+        setUploadItems((prev) =>
+          prev.map((u) => (u.id === item.id ? { ...u, status: 'error', error: 'Failed to upload' } : u))
+        )
+        toast({ title: 'Error', description: `Failed to upload ${item.file.name}`, variant: 'destructive' })
+        setTimeout(() => {
+          setUploadItems((prev) => prev.filter((u) => u.id !== item.id))
+        }, 4000)
       }
     }
 
-    setUploading(false)
+    // Check if all items are done
+    setUploadItems((prev) => {
+      const remaining = prev.filter((u) => u.status === 'uploading' || u.status === 'parsing')
+      if (remaining.length === 0) {
+        // Will set uploading to false after the last item is cleaned up
+        setTimeout(() => setUploading(false), 1500)
+      }
+      return prev
+    })
+  }
+
+  const handleCancelUpload = (itemId: string) => {
+    const xhr = abortControllersRef.current.get(itemId)
+    if (xhr) {
+      xhr.abort()
+    }
+    setUploadItems((prev) => prev.filter((u) => u.id !== itemId))
   }
 
   const handleDelete = async (docId: string, filename: string) => {
@@ -122,6 +224,80 @@ export function DocumentSidebar() {
         </div>
         <DropZone onFilesSelected={handleUpload} disabled={uploading} compact />
       </div>
+
+      {/* Upload Progress Panel */}
+      {uploadItems.length > 0 && (
+        <div className="px-3 py-2 border-b shrink-0 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Loader2 className="h-3.5 w-3.5 text-emerald-600 animate-spin" />
+              <span className="text-xs font-medium text-muted-foreground">
+                {uploadItems.filter((u) => u.status === 'uploading').length > 0
+                  ? `Uploading ${uploadItems.filter((u) => u.status === 'uploading').length} file${uploadItems.filter((u) => u.status === 'uploading').length > 1 ? 's' : ''}...`
+                  : uploadItems.filter((u) => u.status === 'parsing').length > 0
+                    ? 'Processing documents...'
+                    : 'Uploads complete'}
+              </span>
+            </div>
+          </div>
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {uploadItems.map((item) => {
+              const Icon = FILE_ICONS[getFileType(item.file.name)] || FileText
+              return (
+                <div
+                  key={item.id}
+                  className={cn(
+                    'rounded-lg border p-2.5 space-y-1.5 transition-all',
+                    item.status === 'error' && 'border-destructive/50 bg-destructive/5',
+                    item.status === 'done' && 'border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/20',
+                    item.status === 'parsing' && 'border-amber-500/30 bg-amber-50 dark:bg-amber-950/20',
+                    item.status === 'uploading' && 'border-border',
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="text-xs font-medium truncate flex-1">{item.file.name}</span>
+                    {item.status === 'done' && (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                    )}
+                    {item.status === 'error' && (
+                      <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+                    )}
+                    {item.status === 'parsing' && (
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium shrink-0">Parsing...</span>
+                    )}
+                    {item.status === 'uploading' && (
+                      <>
+                        <span className="text-[10px] text-muted-foreground shrink-0">{item.progress}%</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5 shrink-0"
+                          onClick={() => handleCancelUpload(item.id)}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  {item.status === 'uploading' && (
+                    <Progress value={item.progress} className="h-1.5" />
+                  )}
+                  {item.status === 'parsing' && (
+                    <Progress value={100} className="h-1.5 [&>[data-slot=progress-indicator]]:bg-amber-500 [&>[data-slot=progress-indicator]]:animate-pulse" />
+                  )}
+                  {item.status === 'done' && (
+                    <Progress value={100} className="h-1.5 [&>[data-slot=progress-indicator]]:bg-emerald-500" />
+                  )}
+                  {item.status === 'error' && item.error && (
+                    <p className="text-[10px] text-destructive">{item.error}</p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Discipline Filter */}
       <div className="px-3 py-2 border-b shrink-0">

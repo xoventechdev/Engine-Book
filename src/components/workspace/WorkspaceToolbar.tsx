@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/tooltip'
 
 export function WorkspaceToolbar() {
-  const { currentProject, setViewMode, setDocuments, setChatMessages, setSelectedDocumentId } = useAppStore()
+  const { currentProject, setViewMode, setCurrentProject, setDocuments, setChatMessages, setSelectedDocumentId } = useAppStore()
   const { theme, setTheme } = useTheme()
 
   const handleBack = () => {
