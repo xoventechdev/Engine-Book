@@ -97,7 +97,7 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
 
   if (!selectedDocumentId) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-muted/20">
+      <div className="h-full flex items-center justify-center bg-muted/20">
         <div className="text-center space-y-3 max-w-sm">
           <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mx-auto">
             <FileText className="h-8 w-8 text-muted-foreground" />
@@ -115,7 +115,7 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
 
   if (loading) {
     return (
-      <div className="flex-1 p-6 space-y-4 bg-card">
+      <div className="h-full p-6 space-y-4 bg-card overflow-y-auto">
         <Skeleton className="h-6 w-48" />
         <Skeleton className="h-4 w-32" />
         <div className="space-y-3 mt-4">
@@ -129,7 +129,7 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
 
   if (error) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-muted/20">
+      <div className="h-full flex items-center justify-center bg-muted/20">
         <div className="text-center space-y-3">
           <AlertCircle className="h-8 w-8 text-destructive mx-auto" />
           <p className="text-sm text-destructive">{error}</p>
@@ -144,7 +144,7 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-card overflow-hidden">
+    <div className="h-full flex flex-col bg-card overflow-hidden">
       {/* Document header */}
       <div className="px-4 py-2.5 border-b flex items-center gap-2 shrink-0">
         {selectedDoc?.fileType === 'pdf' && <FileText className="h-4 w-4 text-rose-500" />}
@@ -156,7 +156,7 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
       </div>
 
       {/* Document content */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden relative">
         {contentType === 'pdf' && pdfBlobUrl && (
           <iframe
             src={pdfBlobUrl}

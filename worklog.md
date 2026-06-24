@@ -42,3 +42,19 @@ Stage Summary:
 - Fixed: `setCurrentProject is not defined` in WorkspaceToolbar.tsx (added missing destructuring)
 - Added: Full upload progress tracking with per-file progress bars in DocumentSidebar.tsx
 - Note: Server OOM in sandbox environment prevents full E2E browser testing (known limitation)
+---
+Task ID: 2
+Agent: main
+Task: Fix dropzone stuck disabled after upload + PDF viewer tiny height
+
+Work Log:
+- Diagnosed dropzone issue: `uploading` boolean state managed separately from `uploadItems`, never reset because the cleanup check ran synchronously while items were still in async `parsing` state via setTimeout
+- Fixed by removing separate `uploading` state and deriving it: `const uploading = uploadItems.some(u => u.status === 'uploading' || u.status === 'parsing')` — auto-resets the instant all items leave active states
+- Diagnosed PDF height issue: DocumentViewer root used `flex-1` class but parent (react-resizable-panels Panel) is not a flex container, so `flex-1` had no effect — iframe collapsed to minimal height
+- Fixed DocumentViewer: changed all root containers from `flex-1` to `h-full` (4 places: empty state, loading, error, main view)
+- Added `min-h-0 relative` to the content wrapper div to prevent flexbox min-height auto issue with iframe
+- ESLint passes cleanly
+
+Stage Summary:
+- Fixed: Dropzone no longer gets stuck disabled — `uploading` is now derived from uploadItems state
+- Fixed: PDF viewer now fills full panel height using `h-full` + `min-h-0`

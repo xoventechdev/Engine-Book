@@ -48,11 +48,13 @@ export function DocumentSidebar() {
     disciplineFilter,
     setDisciplineFilter,
   } = useAppStore()
-  const [uploading, setUploading] = useState(false)
   const [uploadItems, setUploadItems] = useState<UploadItem[]>([])
   const [loading, setLoading] = useState(true)
   const { toast } = useToast()
   const abortControllersRef = useRef<Map<string, XMLHttpRequest>>(new Map())
+
+  // Derive uploading state from active items — never gets stuck
+  const uploading = uploadItems.some((u) => u.status === 'uploading' || u.status === 'parsing')
 
   const projectId = currentProject?.id
 
@@ -76,7 +78,6 @@ export function DocumentSidebar() {
 
   const handleUpload = async (files: File[]) => {
     if (!projectId) return
-    setUploading(true)
 
     const items: UploadItem[] = files.map((file, i) => ({
       id: `${Date.now()}-${i}`,
@@ -148,7 +149,7 @@ export function DocumentSidebar() {
             addDocument(result.doc)
           }
           toast({ title: 'Uploaded', description: `${item.file.name} uploaded successfully` })
-          // Remove after a short delay to show "done" state
+          // Show "done" briefly, then auto-clean
           setTimeout(() => {
             setUploadItems((prev) =>
               prev.map((u) => (u.id === item.id ? { ...u, status: 'done' } : u))
@@ -176,16 +177,6 @@ export function DocumentSidebar() {
         }, 4000)
       }
     }
-
-    // Check if all items are done
-    setUploadItems((prev) => {
-      const remaining = prev.filter((u) => u.status === 'uploading' || u.status === 'parsing')
-      if (remaining.length === 0) {
-        // Will set uploading to false after the last item is cleaned up
-        setTimeout(() => setUploading(false), 1500)
-      }
-      return prev
-    })
   }
 
   const handleCancelUpload = (itemId: string) => {
