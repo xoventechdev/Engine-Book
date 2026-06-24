@@ -46,6 +46,11 @@ export async function POST(request: NextRequest) {
   try {
     const { projectId, message, disciplineFilter } = await request.json();
 
+    console.log(`\n[CHAT-DEBUG] ========== NEW CHAT REQUEST ==========`);
+    console.log(`[CHAT-DEBUG] Project: ${projectId}`);
+    console.log(`[CHAT-DEBUG] Message: "${message?.slice(0, 100)}"`);
+    console.log(`[CHAT-DEBUG] Discipline filter: ${disciplineFilter || 'none'}`);
+
     if (!projectId || !message) {
       return NextResponse.json({ error: 'projectId and message are required' }, { status: 400 });
     }
@@ -60,6 +65,11 @@ export async function POST(request: NextRequest) {
       },
       select: { id: true, filename: true, fileType: true, filePath: true },
     });
+
+    console.log(`[CHAT-DEBUG] Found ${documents.length} documents in project`);
+    for (const d of documents) {
+      console.log(`[CHAT-DEBUG]   - ${d.filename} (type=${d.fileType}, id=${d.id})`);
+    }
 
     const documentIds = documents.map((d) => d.id);
     const docNameMap = new Map(documents.map((d) => [d.id, d.filename]));
@@ -76,15 +86,22 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    console.log(`[CHAT-DEBUG] Found ${chunks.length} total chunks in DB`);
+
     // Find documents with no chunks and re-process them
     const chunkedDocIds = new Set(chunks.map((c) => c.documentId));
     const unchunkedDocs = documents.filter((d) => !chunkedDocIds.has(d.id));
 
     if (unchunkedDocs.length > 0) {
+      console.log(`[CHAT-DEBUG] ⚠️  ${unchunkedDocs.length} documents have NO chunks — re-chunking...`);
       for (const doc of unchunkedDocs) {
         try {
+          console.log(`[CHAT-DEBUG]   Re-chunking: ${doc.filename} (${doc.fileType})`);
           const absPath = path.join(process.cwd(), doc.filePath);
-          if (!fs.existsSync(absPath)) continue;
+          if (!fs.existsSync(absPath)) {
+            console.log(`[CHAT-DEBUG]   ❌ File not found on disk: ${absPath}`);
+            continue;
+          }
 
           const fileBuffer = fs.readFileSync(absPath);
           let pages: { text: string; pageNumber: number }[] = [];
@@ -92,6 +109,7 @@ export async function POST(request: NextRequest) {
           if (doc.fileType === 'pdf') {
             const pdfResult = await extractPdfText(fileBuffer);
             pages = pdfResult.pages.filter((p) => p.text.trim().length > 0);
+            console.log(`[CHAT-DEBUG]   PDF extracted ${pages.length} non-empty pages`);
           } else if (doc.fileType === 'docx') {
             const mammoth = await import('mammoth');
             const result = await mammoth.extractRawText({ buffer: fileBuffer });
@@ -127,6 +145,8 @@ export async function POST(request: NextRequest) {
                 chunkText(p.text, 500, 50).map((c) => ({ ...c, pageNumber: p.pageNumber }))
               );
 
+          console.log(`[CHAT-DEBUG]   Generated ${docChunks.length} chunks for ${doc.filename}`);
+
           if (docChunks.length > 0) {
             await db.documentChunk.createMany({
               data: docChunks.map((chunk) => ({
@@ -145,12 +165,17 @@ export async function POST(request: NextRequest) {
                 chunkIndex: chunk.index,
               }))
             );
+            console.log(`[CHAT-DEBUG]   ✅ Saved ${docChunks.length} chunks to DB`);
+          } else {
+            console.log(`[CHAT-DEBUG]   ⚠️  No chunks generated — document may be empty/image-only`);
           }
         } catch (err) {
-          console.error(`Failed to re-chunk document ${doc.id}:`, err);
+          console.error(`[CHAT-DEBUG]   ❌ Failed to re-chunk ${doc.filename}:`, err);
         }
       }
     }
+
+    console.log(`[CHAT-DEBUG] Total chunks available for search: ${chunks.length}`);
 
     // 3. Search for relevant chunks
     const searchResults = searchChunks(
@@ -162,6 +187,11 @@ export async function POST(request: NextRequest) {
       10
     );
 
+    console.log(`[CHAT-DEBUG] Search returned ${searchResults.length} relevant chunks`);
+    for (const r of searchResults.slice(0, 3)) {
+      console.log(`[CHAT-DEBUG]   - [${r.documentName}, p${r.pageNumber}] "${r.text.slice(0, 80).replace(/\n/g, '\\n')}"`);
+    }
+
     // 4. Build context from search results
     const contextParts = searchResults.map(
       (chunk, i) =>
@@ -169,6 +199,10 @@ export async function POST(request: NextRequest) {
     );
 
     const context = contextParts.join('\n\n---\n\n');
+    console.log(`[CHAT-DEBUG] Context length: ${context.length} chars`);
+    if (context.length === 0) {
+      console.log(`[CHAT-DEBUG] ⚠️  NO CONTEXT — AI will say "not found in documents"`);
+    }
 
     // 5. Get conversation history (last 10 messages)
     const history = await db.chatMessage.findMany({
@@ -196,6 +230,7 @@ export async function POST(request: NextRequest) {
       ? `Context from uploaded documents:\n\n${context}\n\n---\n\nUser question: ${message}`
       : `No document context was found. The user has uploaded ${documents.length} document(s) but no text could be extracted from them.\n\nUser question: ${message}`;
 
+    console.log(`[CHAT-DEBUG] Sending ${llmMessages.length} messages to LLM (${userMessageWithContext.length} chars total)`);
     llmMessages.push({ role: 'user', content: userMessageWithContext });
 
     // 7. Call LLM
@@ -206,6 +241,8 @@ export async function POST(request: NextRequest) {
     });
 
     const aiResponse = completion.choices[0]?.message?.content || 'No response generated.';
+    console.log(`[CHAT-DEBUG] LLM response: ${aiResponse.length} chars`);
+    console.log(`[CHAT-DEBUG] AI preview: "${aiResponse.slice(0, 150).replace(/\n/g, '\\n')}"`);
 
     // 8. Extract citations from response
     const citations = extractCitations(aiResponse, docNameMap, searchResults);
