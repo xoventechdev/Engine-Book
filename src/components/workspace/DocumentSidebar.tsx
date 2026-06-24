@@ -141,7 +141,8 @@ export function DocumentSidebar() {
         })
 
         if (result.ok) {
-          const chunkInfo = (result.doc as any)?.chunkCount
+          const debug = (result.doc as any)?.debug
+          const chunkCount = (result.doc as any)?.chunkCount
             ? ` (${(result.doc as any).chunkCount} chunks)`
             : ''
           // Server already parsed & chunked — go straight to done
@@ -151,7 +152,16 @@ export function DocumentSidebar() {
           if (result.doc) {
             addDocument(result.doc)
           }
-          toast({ title: 'Uploaded', description: `${item.file.name} ready for AI chat${chunkInfo}` })
+          // Warn if parsing failed (0 chunks)
+          if (debug && !debug.parseOk) {
+            toast({ 
+              title: 'Uploaded but no text extracted', 
+              description: `${item.file.name} was saved but no text chunks were created. The file may be empty or image-only. Click the 🐛 button in AI Chat for diagnostics.`,
+              variant: 'destructive' 
+            })
+          } else {
+            toast({ title: 'Uploaded', description: `${item.file.name} ready for AI chat${chunkCount}` })
+          }
           // Auto-clean after showing done state
           setTimeout(() => {
             setUploadItems((prev) => prev.filter((u) => u.id !== item.id))

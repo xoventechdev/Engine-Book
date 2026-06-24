@@ -5,10 +5,8 @@ import { useAppStore, type ChatMessage as ChatMessageType, type Citation } from 
 import { ChatMessage } from '@/components/chat/ChatMessage'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
-import { Send, Trash2, MessageSquare, Loader2, Sparkles } from 'lucide-react'
+import { Send, Trash2, MessageSquare, Loader2, Sparkles, Bug } from 'lucide-react'
 
 export function ChatPanel() {
   const {
@@ -26,6 +24,8 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { toast } = useToast()
+  const [showDebug, setShowDebug] = useState(false)
+  const [lastDebug, setLastDebug] = useState<Record<string, unknown> | null>(null)
 
   const projectId = currentProject?.id
 
@@ -96,6 +96,13 @@ export function ChatPanel() {
         citations: data.citations || null,
         createdAt: data.createdAt,
       })
+      // Store debug info if available
+      if (data.debug) {
+        setLastDebug(data.debug)
+        if (!data.hasContext) {
+          setShowDebug(true)
+        }
+      }
     } catch (error) {
       toast({
         title: 'AI Error',
@@ -132,6 +139,17 @@ export function ChatPanel() {
 
   const hasDocuments = documents.length > 0
 
+  // Fetch full diagnostics when debug panel is open
+  const [debugData, setDebugData] = useState<Record<string, unknown> | null>(null)
+  useEffect(() => {
+    if (showDebug && projectId) {
+      fetch(`/api/debug?projectId=${projectId}`)
+        .then(r => r.json())
+        .then(setDebugData)
+        .catch(() => {})
+    }
+  }, [showDebug, projectId])
+
   return (
     <div className="flex flex-col h-full bg-card border-l">
       {/* Header */}
@@ -140,15 +158,26 @@ export function ChatPanel() {
           <Sparkles className="h-4 w-4 text-emerald-500" />
           <h3 className="text-sm font-semibold">AI Chat</h3>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={handleClear}
-          title="Clear chat"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant={showDebug ? 'default' : 'ghost'}
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setShowDebug(!showDebug)}
+            title="Toggle debug panel"
+          >
+            <Bug className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleClear}
+            title="Clear chat"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
 
       {/* Messages */}
@@ -195,6 +224,87 @@ export function ChatPanel() {
           )}
         </div>
       </div>
+
+      {/* Debug Panel */}
+      {showDebug && (
+        <div className="border-t bg-muted/30 p-3 max-h-52 overflow-y-auto shrink-0">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Debug Info</span>
+            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setShowDebug(false)}>
+              <span className="text-xs">✕</span>
+            </Button>
+          </div>
+          {lastDebug && (
+            <div className="space-y-1.5 text-[11px] font-mono">
+              <div className="flex gap-2">
+                <span className="text-muted-foreground w-28 shrink-0">Documents:</span>
+                <span className={lastDebug.documentCount === 0 ? 'text-destructive' : 'text-foreground'}>{String(lastDebug.documentCount)}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-muted-foreground w-28 shrink-0">Chunks in DB:</span>
+                <span className={Number(lastDebug.totalChunksInDb) === 0 ? 'text-destructive' : 'text-foreground'}>{String(lastDebug.totalChunksInDb)}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-muted-foreground w-28 shrink-0">Search Results:</span>
+                <span className={Number(lastDebug.searchResultsCount) === 0 ? 'text-destructive' : 'text-emerald-600'}>{String(lastDebug.searchResultsCount)}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-muted-foreground w-28 shrink-0">Context Length:</span>
+                <span>{String(lastDebug.contextLength)} chars</span>
+              </div>
+              {Boolean(lastDebug.rechunkedDocs) && (lastDebug.rechunkedDocs as string[]).length > 0 && (
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground w-28 shrink-0">Re-chunked:</span>
+                  <span className="text-amber-600">{(lastDebug.rechunkedDocs as string[]).join(', ')}</span>
+                </div>
+              )}
+              {Array.isArray(lastDebug.chunksPerDoc) && (
+                <div className="mt-1.5 pt-1.5 border-t">
+                  <span className="text-muted-foreground">Chunks per doc:</span>
+                  <div className="mt-1 space-y-0.5">
+                    {(lastDebug.chunksPerDoc as { filename: string; chunkCount: number }[]).map(d => (
+                      <div key={d.filename} className="flex gap-2">
+                        <span className="truncate flex-1">{d.filename}</span>
+                        <span className={d.chunkCount === 0 ? 'text-destructive' : 'text-emerald-600'}>{d.chunkCount}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {debugData && Boolean(debugData.documents) && Array.isArray(debugData.documents) && (
+            <div className="mt-2 pt-2 border-t">
+              <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Full Diagnostics</span>
+              <div className="mt-1.5 space-y-1.5 text-[11px] font-mono">
+                {(debugData.documents as { filename: string; fileType: string; fileExists: boolean; chunkCount: number; chunksPreview?: { text: string }[] }[]).map(d => (
+                  <div key={d.filename} className="rounded bg-background p-1.5 border">
+                    <div className="flex items-center gap-1.5">
+                      <span className={d.fileExists ? 'text-emerald-500' : 'text-destructive'}>{d.fileExists ? '●' : '○'}</span>
+                      <span className="truncate font-medium">{d.filename}</span>
+                      <span className="text-muted-foreground">({d.fileType})</span>
+                    </div>
+                    <div className="flex gap-3 mt-0.5 text-muted-foreground">
+                      <span>chunks: {d.chunkCount}</span>
+                      {d.chunksPreview && d.chunksPreview.length > 0 && (
+                        <span className="truncate">text: &quot;{d.chunksPreview[0].text.slice(0, 80)}&quot;</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {debugData.pdfTests && Object.keys(debugData.pdfTests as Record<string, unknown>).length > 0 && (
+                  <div className="mt-1.5">
+                    <span className="text-muted-foreground font-semibold">PDF extraction test:</span>
+                    <pre className="mt-1 text-[10px] bg-background p-1.5 rounded border overflow-x-auto max-h-24">
+                      {JSON.stringify(debugData.pdfTests, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Input */}
       <div className="p-3 border-t shrink-0">

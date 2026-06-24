@@ -261,6 +261,22 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // Build debug info for the response
+    const debugInfo = {
+      documentCount: documents.length,
+      documentList: documents.map(d => ({ filename: d.filename, fileType: d.fileType, id: d.id })),
+      totalChunksInDb: chunks.length,
+      chunksPerDoc: documents.map(d => ({
+        filename: d.filename,
+        chunkCount: chunks.filter(c => c.documentId === d.id).length,
+      })),
+      searchResultsCount: searchResults.length,
+      contextLength: context.length,
+      hasContext: searchResults.length > 0,
+      rechunkedDocs: unchunkedDocs.map(d => d.filename),
+    };
+    console.log('[CHAT-DEBUG] ========== CHAT RESPONSE ==========', JSON.stringify(debugInfo, null, 2));
+
     return NextResponse.json({
       id: assistantMessage.id,
       role: 'assistant',
@@ -268,6 +284,7 @@ export async function POST(request: NextRequest) {
       citations,
       createdAt: assistantMessage.createdAt,
       hasContext: searchResults.length > 0,
+      debug: debugInfo,
     });
   } catch (error) {
     console.error('Chat error:', error);

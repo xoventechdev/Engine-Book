@@ -95,7 +95,17 @@ export async function POST(request: NextRequest) {
 
     console.log(`[UPLOAD-DEBUG] ========== UPLOAD COMPLETE (${chunkCount} chunks) ==========\n`);
 
-    return NextResponse.json({ ...document, chunkCount }, { status: 201 });
+    return NextResponse.json({ 
+      ...document, 
+      chunkCount,
+      debug: {
+        fileType,
+        fileSize: fileBuffer.length,
+        chunkCount,
+        verifiedChunks: verifyChunks,
+        parseOk: chunkCount > 0 || verifyChunks > 0,
+      }
+    }, { status: 201 });
   } catch (error) {
     console.error('[UPLOAD-DEBUG] ❌ FATAL UPLOAD ERROR:', error);
     return NextResponse.json({ error: 'Failed to upload document' }, { status: 500 });
