@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import path from 'path';
 import fs from 'fs';
 import ZAI from 'z-ai-web-dev-sdk';
+import { extractPdfText } from '@/lib/pdf-parser';
 
 const COMPARE_SYSTEM_PROMPT = `You are an expert at comparing engineering document revisions.
 Compare the two document texts provided and identify all differences.
@@ -78,8 +79,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Also compute a text-level diff
-    const { default: Diff } = await import('diff');
-    const diffResult = Diff.diffWords(textA.slice(0, 5000), textB.slice(0, 5000));
+    const { diffWords } = await import('diff');
+    const diffResult = diffWords(textA.slice(0, 5000), textB.slice(0, 5000));
 
     return NextResponse.json({
       documentA: { id: docA.id, filename: docA.filename },
@@ -120,9 +121,8 @@ async function extractDocumentText(doc: { id: string; fileType: string; filePath
   const fileBuffer = fs.readFileSync(absPath);
 
   if (doc.fileType === 'pdf') {
-    const pdfParse = (await import('pdf-parse')).default;
-    const data = await pdfParse(fileBuffer);
-    return data.text;
+    const pdfResult = await extractPdfText(fileBuffer);
+    return pdfResult.fullText;
   } else if (doc.fileType === 'docx') {
     const mammoth = await import('mammoth');
     const result = await mammoth.extractRawText({ buffer: fileBuffer });

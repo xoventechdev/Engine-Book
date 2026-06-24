@@ -58,3 +58,28 @@ Work Log:
 Stage Summary:
 - Fixed: Dropzone no longer gets stuck disabled — `uploading` is now derived from uploadItems state
 - Fixed: PDF viewer now fills full panel height using `h-full` + `min-h-0`
+---
+Task ID: 3
+Agent: main
+Task: Fix AI chat not reading uploaded PDF documents
+
+Work Log:
+- Root cause: `pdf-parse` v5 completely changed its API from a function-based to class-based API
+  - Old: `const data = await pdfParse(buffer)` — no longer works
+  - New: `new PDFParse({ data: new Uint8Array(buffer), verbosity: VerbosityLevel.ERRORS })` then `await parser.getText()`
+  - The old code used `(await import('pdf-parse')).default` which returns `undefined` in v5
+  - This caused all PDF parsing to fail silently (errors caught by `.catch()` in background task)
+  - No chunks were ever created → chat RAG found zero context
+- Also found `diff` library has no `.default` export; `diffWords` is a named export
+- Created `src/lib/pdf-parser.ts` utility wrapping the new pdf-parse v5 API
+- Fixed `src/app/api/documents/route.ts` — use new PDFParse API for chunking on upload
+- Fixed `src/app/api/compare/route.ts` — fixed pdf-parse and diff imports
+- Fixed `src/app/api/chat/route.ts` — added automatic re-chunking for documents that have no chunks (handles previously uploaded broken docs) + includes path/fs imports for re-chunking
+- All lint and TS checks pass for modified files
+
+Stage Summary:
+- Created: `src/lib/pdf-parser.ts` — shared PDF extraction utility using pdf-parse v5 API
+- Fixed: Document upload now correctly extracts text from PDFs and creates searchable chunks
+- Fixed: Compare documents now correctly extracts PDF text
+- Fixed: Chat auto-re-chunks previously uploaded documents that had no chunks due to the old bug
+- The RAG pipeline (upload → chunk → search → LLM context) now works end-to-end

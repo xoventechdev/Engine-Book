@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getFileType, formatFileSize } from '@/lib/helpers';
+import { getFileType } from '@/lib/helpers';
 import { chunkByPages, chunkText } from '@/lib/chunker';
+import { extractPdfText } from '@/lib/pdf-parser';
 import path from 'path';
 import fs from 'fs';
 
@@ -90,11 +91,8 @@ async function parseAndChunk(documentId: string, absFilePath: string, fileType: 
 
   try {
     if (fileType === 'pdf') {
-      const pdfParse = (await import('pdf-parse')).default;
-      const data = await pdfParse(fileBuffer);
-      // Split PDF text into pages using page markers
-      const pageTexts = splitPdfIntoPages(data.text);
-      pages = pageTexts.map((text, i) => ({ text, pageNumber: i + 1 }));
+      const pdfResult = await extractPdfText(fileBuffer);
+      pages = pdfResult.pages.filter(p => p.text.trim().length > 0);
     } else if (fileType === 'docx') {
       const mammoth = await import('mammoth');
       const result = await mammoth.extractRawText({ buffer: fileBuffer });
@@ -150,18 +148,6 @@ async function parseAndChunk(documentId: string, absFilePath: string, fileType: 
   } catch (error) {
     console.error(`Error parsing document ${documentId}:`, error);
   }
-}
-
-function splitPdfIntoPages(text: string): string[] {
-  // pdf-parse doesn't always provide page-level data cleanly
-  // Split by form feed or double newlines as a heuristic
-  if (!text) return [];
-  const pages = text.split(/\f/).filter((p) => p.trim().length > 0);
-  if (pages.length <= 1) {
-    // No form feeds, split by chunk size
-    return splitTextIntoPages(text, 3000);
-  }
-  return pages;
 }
 
 function splitTextIntoPages(text: string, charsPerPage: number): string[] {
