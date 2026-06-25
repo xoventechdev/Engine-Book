@@ -238,39 +238,34 @@ export function ChatPanel() {
             <div className="space-y-1.5 text-[11px] font-mono">
               <div className="flex gap-2">
                 <span className="text-muted-foreground w-28 shrink-0">Documents:</span>
-                <span className={lastDebug.documentCount === 0 ? 'text-destructive' : 'text-foreground'}>{String(lastDebug.documentCount)}</span>
+                <span className={Number(lastDebug.documentCount) === 0 ? 'text-destructive' : 'text-foreground'}>{String(lastDebug.documentCount)}</span>
               </div>
               <div className="flex gap-2">
-                <span className="text-muted-foreground w-28 shrink-0">Chunks in DB:</span>
-                <span className={Number(lastDebug.totalChunksInDb) === 0 ? 'text-destructive' : 'text-foreground'}>{String(lastDebug.totalChunksInDb)}</span>
+                <span className="text-muted-foreground w-28 shrink-0">PDFs (direct):</span>
+                <span className={Number(lastDebug.pdfCount) > 0 ? 'text-emerald-600' : 'text-muted-foreground'}>{String(lastDebug.pdfCount ?? 0)}</span>
               </div>
-              <div className="flex gap-2">
-                <span className="text-muted-foreground w-28 shrink-0">Search Results:</span>
-                <span className={Number(lastDebug.searchResultsCount) === 0 ? 'text-destructive' : 'text-emerald-600'}>{String(lastDebug.searchResultsCount)}</span>
-              </div>
-              <div className="flex gap-2">
-                <span className="text-muted-foreground w-28 shrink-0">Context Length:</span>
-                <span>{String(lastDebug.contextLength)} chars</span>
-              </div>
-              {Boolean(lastDebug.rechunkedDocs) && (lastDebug.rechunkedDocs as string[]).length > 0 && (
+              {Array.isArray(lastDebug.pdfNames) && (lastDebug.pdfNames as string[]).length > 0 && (
                 <div className="flex gap-2">
-                  <span className="text-muted-foreground w-28 shrink-0">Re-chunked:</span>
-                  <span className="text-amber-600">{(lastDebug.rechunkedDocs as string[]).join(', ')}</span>
+                  <span className="text-muted-foreground w-28 shrink-0">PDF files:</span>
+                  <span className="text-emerald-600 truncate">{(lastDebug.pdfNames as string[]).join(', ')}</span>
                 </div>
               )}
-              {Array.isArray(lastDebug.chunksPerDoc) && (
-                <div className="mt-1.5 pt-1.5 border-t">
-                  <span className="text-muted-foreground">Chunks per doc:</span>
-                  <div className="mt-1 space-y-0.5">
-                    {(lastDebug.chunksPerDoc as { filename: string; chunkCount: number }[]).map(d => (
-                      <div key={d.filename} className="flex gap-2">
-                        <span className="truncate flex-1">{d.filename}</span>
-                        <span className={d.chunkCount === 0 ? 'text-destructive' : 'text-emerald-600'}>{d.chunkCount}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <div className="flex gap-2">
+                <span className="text-muted-foreground w-28 shrink-0">Non-PDFs:</span>
+                <span>{String(lastDebug.nonPdfCount ?? 0)}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-muted-foreground w-28 shrink-0">Text Context:</span>
+                <span>{String(lastDebug.textContextLength ?? 0)} chars</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-muted-foreground w-28 shrink-0">PDF Direct Mode:</span>
+                <span className={lastDebug.usedPdfDirectMode ? 'text-emerald-600' : 'text-muted-foreground'}>{String(lastDebug.usedPdfDirectMode)}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-muted-foreground w-28 shrink-0">Has Content:</span>
+                <span className={lastDebug.hasAnyContent ? 'text-emerald-600' : 'text-destructive'}>{String(lastDebug.hasAnyContent)}</span>
+              </div>
             </div>
           )}
           {debugData && Boolean(debugData.documents) && Array.isArray(debugData.documents) && (

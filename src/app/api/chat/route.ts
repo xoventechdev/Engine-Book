@@ -1,16 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { searchChunks } from '@/lib/chunker';
-import { extractPdfText } from '@/lib/pdf-parser';
-import { chunkByPages, chunkText } from '@/lib/chunker';
+import { searchChunks, chunkText } from '@/lib/chunker';
 import ZAI from 'z-ai-web-dev-sdk';
 import path from 'path';
 import fs from 'fs';
 
 const CHAT_SYSTEM_PROMPT = `You are an expert engineering assistant helping engineers understand technical documents.
-You are given document chunks retrieved from the user's uploaded files.
-Answer the user's question using ONLY the provided context.
-For every fact you state, include a citation in this format: [[Document Name, Page X]].
+You will receive PDF documents and/or extracted text from uploaded files.
+Analyze the documents thoroughly and answer the user's question precisely.
+For every fact you state from a specific document, include a citation in this format: [[Document Name, Page X]].
 If the answer is not in the documents, say "This information was not found in the uploaded documents."
 Be precise with numbers, units, and technical values. Do not guess.
 Respond in the same language the user asks in (English or Bengali).
@@ -41,15 +39,14 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Send a chat message (RAG pipeline)
+// POST: Send a chat message
 export async function POST(request: NextRequest) {
   try {
     const { projectId, message, disciplineFilter } = await request.json();
 
-    console.log(`\n[CHAT-DEBUG] ========== NEW CHAT REQUEST ==========`);
-    console.log(`[CHAT-DEBUG] Project: ${projectId}`);
-    console.log(`[CHAT-DEBUG] Message: "${message?.slice(0, 100)}"`);
-    console.log(`[CHAT-DEBUG] Discipline filter: ${disciplineFilter || 'none'}`);
+    console.log(`\n[CHAT] ========== NEW CHAT REQUEST ==========`);
+    console.log(`[CHAT] Project: ${projectId}, Message: "${message?.slice(0, 100)}"`);
+    console.log(`[CHAT] Discipline filter: ${disciplineFilter || 'none'}`);
 
     if (!projectId || !message) {
       return NextResponse.json({ error: 'projectId and message are required' }, { status: 400 });
@@ -66,145 +63,163 @@ export async function POST(request: NextRequest) {
       select: { id: true, filename: true, fileType: true, filePath: true },
     });
 
-    console.log(`[CHAT-DEBUG] Found ${documents.length} documents in project`);
+    console.log(`[CHAT] Found ${documents.length} documents`);
     for (const d of documents) {
-      console.log(`[CHAT-DEBUG]   - ${d.filename} (type=${d.fileType}, id=${d.id})`);
+      console.log(`[CHAT]   - ${d.filename} (type=${d.fileType})`);
     }
 
-    const documentIds = documents.map((d) => d.id);
     const docNameMap = new Map(documents.map((d) => [d.id, d.filename]));
 
-    // 2. Get chunks — re-chunk documents that have none
-    let chunks = await db.documentChunk.findMany({
-      where: { documentId: { in: documentIds } },
-      select: {
-        id: true,
-        documentId: true,
-        text: true,
-        pageNumber: true,
-        chunkIndex: true,
-      },
-    });
+    // 2. Separate PDFs (sent as raw files to Gemini) from non-PDFs (text chunks)
+    const pdfDocs = documents.filter((d) => d.fileType === 'pdf');
+    const nonPdfDocs = documents.filter((d) => d.fileType !== 'pdf');
 
-    console.log(`[CHAT-DEBUG] Found ${chunks.length} total chunks in DB`);
+    console.log(`[CHAT] PDFs: ${pdfDocs.length}, Non-PDFs: ${nonPdfDocs.length}`);
 
-    // Find documents with no chunks and re-process them
-    const chunkedDocIds = new Set(chunks.map((c) => c.documentId));
-    const unchunkedDocs = documents.filter((d) => !chunkedDocIds.has(d.id));
+    // 3. For non-PDFs: get or create text chunks, then keyword-search
+    let textContext = '';
+    const nonPdfDocIds = nonPdfDocs.map((d) => d.id);
 
-    if (unchunkedDocs.length > 0) {
-      console.log(`[CHAT-DEBUG] ⚠️  ${unchunkedDocs.length} documents have NO chunks — re-chunking...`);
-      for (const doc of unchunkedDocs) {
-        try {
-          console.log(`[CHAT-DEBUG]   Re-chunking: ${doc.filename} (${doc.fileType})`);
-          const absPath = path.join(process.cwd(), doc.filePath);
-          if (!fs.existsSync(absPath)) {
-            console.log(`[CHAT-DEBUG]   ❌ File not found on disk: ${absPath}`);
-            continue;
-          }
+    if (nonPdfDocs.length > 0) {
+      // Get existing chunks
+      let chunks = await db.documentChunk.findMany({
+        where: { documentId: { in: nonPdfDocIds } },
+        select: {
+          id: true,
+          documentId: true,
+          text: true,
+          pageNumber: true,
+          chunkIndex: true,
+        },
+      });
 
-          const fileBuffer = fs.readFileSync(absPath);
-          let pages: { text: string; pageNumber: number }[] = [];
+      console.log(`[CHAT] Non-PDF chunks in DB: ${chunks.length}`);
 
-          if (doc.fileType === 'pdf') {
-            const pdfResult = await extractPdfText(fileBuffer);
-            pages = pdfResult.pages.filter((p) => p.text.trim().length > 0);
-            console.log(`[CHAT-DEBUG]   PDF extracted ${pages.length} non-empty pages`);
-          } else if (doc.fileType === 'docx') {
-            const mammoth = await import('mammoth');
-            const result = await mammoth.extractRawText({ buffer: fileBuffer });
-            const pageChunks = splitTextIntoPages(result.value, 3000);
-            pages = pageChunks.map((text, i) => ({ text, pageNumber: i + 1 }));
-          } else if (doc.fileType === 'txt') {
-            const text = fileBuffer.toString('utf-8');
-            const pageChunks = splitTextIntoPages(text, 3000);
-            pages = pageChunks.map((text, i) => ({ text, pageNumber: i + 1 }));
-          } else if (doc.fileType === 'xlsx' || doc.fileType === 'csv') {
-            const XLSX = await import('xlsx');
-            let jsonData: string[][] = [];
-            if (doc.fileType === 'xlsx') {
-              const workbook = XLSX.read(fileBuffer);
-              const sheetName = workbook.SheetNames[0];
-              const sheet = workbook.Sheets[sheetName];
-              jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as string[][];
-            } else {
-              const csvText = fileBuffer.toString('utf-8');
-              jsonData = XLSX.utils.sheet_to_json(
-                XLSX.utils.aoa_to_sheet(csvText.split('\n').map((r) => r.split(','))),
-                { header: 1 }
-              ) as string[][];
+      // Re-chunk documents that have none (e.g. newly uploaded DOCX/TXT/XLSX/CSV)
+      const chunkedDocIds = new Set(chunks.map((c) => c.documentId));
+      const unchunkedDocs = nonPdfDocs.filter((d) => !chunkedDocIds.has(d.id));
+
+      if (unchunkedDocs.length > 0) {
+        console.log(`[CHAT] Re-chunking ${unchunkedDocs.length} non-PDF documents...`);
+        for (const doc of unchunkedDocs) {
+          try {
+            const absPath = path.join(process.cwd(), doc.filePath);
+            if (!fs.existsSync(absPath)) {
+              console.log(`[CHAT]   File not found: ${absPath}`);
+              continue;
             }
-            const text = jsonData.map((row) => row.filter(Boolean).join(' | ')).join('\n');
-            const pageChunks = splitTextIntoPages(text, 3000);
-            pages = pageChunks.map((t, i) => ({ text: t, pageNumber: i + 1 }));
-          }
+            const fileBuffer = fs.readFileSync(absPath);
+            let fullText = '';
 
-          const docChunks = doc.fileType === 'pdf'
-            ? chunkByPages(pages)
-            : pages.flatMap((p) =>
-                chunkText(p.text, 500, 50).map((c) => ({ ...c, pageNumber: p.pageNumber }))
+            if (doc.fileType === 'docx') {
+              const mammoth = await import('mammoth');
+              const result = await mammoth.extractRawText({ buffer: fileBuffer });
+              fullText = result.value;
+            } else if (doc.fileType === 'txt') {
+              fullText = fileBuffer.toString('utf-8');
+            } else if (doc.fileType === 'xlsx' || doc.fileType === 'csv') {
+              const XLSX = await import('xlsx');
+              let jsonData: string[][] = [];
+              if (doc.fileType === 'xlsx') {
+                const workbook = XLSX.read(fileBuffer);
+                const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as string[][];
+              } else {
+                const csvText = fileBuffer.toString('utf-8');
+                jsonData = XLSX.utils.sheet_to_json(
+                  XLSX.utils.aoa_to_sheet(csvText.split('\n').map((r) => r.split(','))),
+                  { header: 1 }
+                ) as string[][];
+              }
+              fullText = jsonData.map((row) => row.filter(Boolean).join(' | ')).join('\n');
+            }
+
+            if (fullText.trim()) {
+              const pages = splitTextIntoPages(fullText, 3000);
+              const docChunks = pages.flatMap((p, pageIdx) =>
+                chunkText(p, 500, 50).map((c) => ({ ...c, pageNumber: pageIdx + 1 }))
               );
-
-          console.log(`[CHAT-DEBUG]   Generated ${docChunks.length} chunks for ${doc.filename}`);
-
-          if (docChunks.length > 0) {
-            await db.documentChunk.createMany({
-              data: docChunks.map((chunk) => ({
-                documentId: doc.id,
-                chunkIndex: chunk.index,
-                pageNumber: chunk.pageNumber,
-                text: chunk.text,
-              })),
-            });
-            chunks.push(
-              ...docChunks.map((chunk) => ({
-                id: `${doc.id}-${chunk.index}`,
-                documentId: doc.id,
-                text: chunk.text,
-                pageNumber: chunk.pageNumber ?? null,
-                chunkIndex: chunk.index,
-              }))
-            );
-            console.log(`[CHAT-DEBUG]   ✅ Saved ${docChunks.length} chunks to DB`);
-          } else {
-            console.log(`[CHAT-DEBUG]   ⚠️  No chunks generated — document may be empty/image-only`);
+              if (docChunks.length > 0) {
+                await db.documentChunk.createMany({
+                  data: docChunks.map((chunk) => ({
+                    documentId: doc.id,
+                    chunkIndex: chunk.index,
+                    pageNumber: chunk.pageNumber,
+                    text: chunk.text,
+                  })),
+                });
+                chunks.push(
+                  ...docChunks.map((chunk) => ({
+                    id: `${doc.id}-${chunk.index}`,
+                    documentId: doc.id,
+                    text: chunk.text,
+                    pageNumber: chunk.pageNumber ?? null,
+                    chunkIndex: chunk.index,
+                  }))
+                );
+              }
+            }
+          } catch (err) {
+            console.error(`[CHAT] Failed to re-chunk ${doc.filename}:`, err);
           }
-        } catch (err) {
-          console.error(`[CHAT-DEBUG]   ❌ Failed to re-chunk ${doc.filename}:`, err);
         }
+      }
+
+      // Keyword search for relevant chunks
+      const searchResults = searchChunks(
+        chunks.map((c) => ({
+          ...c,
+          documentName: docNameMap.get(c.documentId) || 'Unknown',
+        })),
+        message,
+        10
+      );
+
+      console.log(`[CHAT] Search returned ${searchResults.length} chunks for non-PDFs`);
+
+      if (searchResults.length > 0) {
+        const contextParts = searchResults.map(
+          (chunk, i) =>
+            `[${i + 1}] (Source: ${docNameMap.get(chunk.documentId) || 'Unknown'}, Page ${chunk.pageNumber || 'N/A'}):\n${chunk.text}`
+        );
+        textContext = contextParts.join('\n\n---\n\n');
       }
     }
 
-    console.log(`[CHAT-DEBUG] Total chunks available for search: ${chunks.length}`);
+    // 4. For PDFs: read files from disk and prepare as base64 file_url parts
+    const pdfFileParts: { type: 'file_url'; file_url: { url: string } }[] = [];
+    const pdfNames: string[] = [];
 
-    // 3. Search for relevant chunks
-    const searchResults = searchChunks(
-      chunks.map((c) => ({
-        ...c,
-        documentName: docNameMap.get(c.documentId) || 'Unknown',
-      })),
-      message,
-      10
-    );
+    for (const doc of pdfDocs) {
+      try {
+        const absPath = path.join(process.cwd(), doc.filePath);
+        if (!fs.existsSync(absPath)) {
+          console.log(`[CHAT] PDF file not found: ${absPath}`);
+          continue;
+        }
+        const fileBuffer = fs.readFileSync(absPath);
+        const base64 = fileBuffer.toString('base64');
+        const dataUrl = `data:application/pdf;base64,${base64}`;
 
-    console.log(`[CHAT-DEBUG] Search returned ${searchResults.length} relevant chunks`);
-    for (const r of searchResults.slice(0, 3)) {
-      console.log(`[CHAT-DEBUG]   - [${r.documentName}, p${r.pageNumber}] "${r.text.slice(0, 80).replace(/\n/g, '\\n')}"`);
+        pdfFileParts.push({
+          type: 'file_url',
+          file_url: { url: dataUrl },
+        });
+        pdfNames.push(doc.filename);
+        console.log(`[CHAT] PDF loaded: ${doc.filename} (${fileBuffer.length} bytes, ${base64.length} chars base64)`);
+      } catch (err) {
+        console.error(`[CHAT] Failed to read PDF ${doc.filename}:`, err);
+      }
     }
 
-    // 4. Build context from search results
-    const contextParts = searchResults.map(
-      (chunk, i) =>
-        `[${i + 1}] (Source: ${docNameMap.get(chunk.documentId) || 'Unknown'}, Page ${chunk.pageNumber || 'N/A'}):\n${chunk.text}`
-    );
+    // 5. Build the prompt with text context from non-PDFs
+    const hasPdfFiles = pdfFileParts.length > 0;
+    const hasTextContext = textContext.length > 0;
+    const hasAnyContent = hasPdfFiles || hasTextContext;
 
-    const context = contextParts.join('\n\n---\n\n');
-    console.log(`[CHAT-DEBUG] Context length: ${context.length} chars`);
-    if (context.length === 0) {
-      console.log(`[CHAT-DEBUG] ⚠️  NO CONTEXT — AI will say "not found in documents"`);
-    }
+    console.log(`[CHAT] Final state: ${pdfFileParts.length} PDFs, text context: ${textContext.length} chars, total docs: ${documents.length}`);
 
-    // 5. Get conversation history (last 10 messages)
+    // 6. Get conversation history (last 10 messages)
     const history = await db.chatMessage.findMany({
       where: { projectId },
       orderBy: { createdAt: 'desc' },
@@ -217,35 +232,82 @@ export async function POST(request: NextRequest) {
       content: msg.content,
     }));
 
-    // 6. Build messages for LLM
-    const llmMessages: { role: string; content: string }[] = [
-      { role: 'assistant', content: CHAT_SYSTEM_PROMPT },
-    ];
-
-    for (const msg of conversationHistory) {
-      llmMessages.push({ role: msg.role, content: msg.content });
-    }
-
-    const userMessageWithContext = context
-      ? `Context from uploaded documents:\n\n${context}\n\n---\n\nUser question: ${message}`
-      : `No document context was found. The user has uploaded ${documents.length} document(s) but no text could be extracted from them.\n\nUser question: ${message}`;
-
-    console.log(`[CHAT-DEBUG] Sending ${llmMessages.length} messages to LLM (${userMessageWithContext.length} chars total)`);
-    llmMessages.push({ role: 'user', content: userMessageWithContext });
-
     // 7. Call LLM
     const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: llmMessages as { role: 'user' | 'assistant'; content: string }[],
-      thinking: { type: 'disabled' },
-    });
+    let aiResponse: string;
 
-    const aiResponse = completion.choices[0]?.message?.content || 'No response generated.';
-    console.log(`[CHAT-DEBUG] LLM response: ${aiResponse.length} chars`);
-    console.log(`[CHAT-DEBUG] AI preview: "${aiResponse.slice(0, 150).replace(/\n/g, '\\n')}"`);
+    if (hasPdfFiles) {
+      // === USE VISION API: send PDFs as file_url parts ===
+      console.log(`[CHAT] Using createVision with ${pdfFileParts.length} PDF file(s)`);
+
+      // Build the user message content parts
+      const userContentParts: { type: string; text?: string; file_url?: { url: string } }[] = [];
+
+      // Add text prompt with context
+      let userText = '';
+      if (hasTextContext) {
+        userText = `You have been provided with ${pdfFileParts.length} PDF document(s) (${pdfNames.join(', ')}) AND the following extracted text from other files:\n\n${textContext}\n\n---\n\nUser question: ${message}`;
+      } else {
+        userText = `You have been provided with ${pdfFileParts.length} PDF document(s) (${pdfNames.join(', ')}).\n\nUser question: ${message}`;
+      }
+      userContentParts.push({ type: 'text', text: userText });
+
+      // Add PDF file parts
+      userContentParts.push(...pdfFileParts);
+
+      // Build vision messages
+      const visionMessages: { role: string; content: string | any[] }[] = [
+        { role: 'assistant', content: CHAT_SYSTEM_PROMPT },
+      ];
+
+      for (const msg of conversationHistory) {
+        visionMessages.push({ role: msg.role, content: msg.content });
+      }
+
+      visionMessages.push({
+        role: 'user',
+        content: userContentParts,
+      });
+
+      console.log(`[CHAT] Sending ${visionMessages.length} messages to createVision (${userText.length} chars text + ${pdfFileParts.length} PDFs)`);
+
+      const completion = await zai.chat.completions.createVision({
+        messages: visionMessages as any,
+        thinking: { type: 'disabled' },
+      });
+
+      aiResponse = completion.choices[0]?.message?.content || 'No response generated.';
+    } else {
+      // === FALLBACK: text-only LLM call (no PDFs) ===
+      console.log(`[CHAT] Using createVision (text only, ${textContext.length} chars context)`);
+
+      const userMessageWithContext = hasTextContext
+        ? `Context from uploaded documents:\n\n${textContext}\n\n---\n\nUser question: ${message}`
+        : `No document context was found. The user has uploaded ${documents.length} document(s) but no content could be extracted.\n\nUser question: ${message}`;
+
+      const llmMessages: { role: string; content: string }[] = [
+        { role: 'assistant', content: CHAT_SYSTEM_PROMPT },
+      ];
+
+      for (const msg of conversationHistory) {
+        llmMessages.push({ role: msg.role, content: msg.content });
+      }
+
+      llmMessages.push({ role: 'user', content: userMessageWithContext });
+
+      const completion = await zai.chat.completions.createVision({
+        messages: llmMessages as any,
+        thinking: { type: 'disabled' },
+      });
+
+      aiResponse = completion.choices[0]?.message?.content || 'No response generated.';
+    }
+
+    console.log(`[CHAT] LLM response: ${aiResponse.length} chars`);
+    console.log(`[CHAT] AI preview: "${aiResponse.slice(0, 150).replace(/\n/g, '\\n')}"`);
 
     // 8. Extract citations from response
-    const citations = extractCitations(aiResponse, docNameMap, searchResults);
+    const citations = extractCitations(aiResponse, docNameMap);
 
     // 9. Save messages to database
     await db.chatMessage.create({
@@ -261,21 +323,18 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Build debug info for the response
+    // Build debug info
     const debugInfo = {
       documentCount: documents.length,
-      documentList: documents.map(d => ({ filename: d.filename, fileType: d.fileType, id: d.id })),
-      totalChunksInDb: chunks.length,
-      chunksPerDoc: documents.map(d => ({
-        filename: d.filename,
-        chunkCount: chunks.filter(c => c.documentId === d.id).length,
-      })),
-      searchResultsCount: searchResults.length,
-      contextLength: context.length,
-      hasContext: searchResults.length > 0,
-      rechunkedDocs: unchunkedDocs.map(d => d.filename),
+      pdfCount: pdfDocs.length,
+      pdfNames,
+      nonPdfCount: nonPdfDocs.length,
+      textContextLength: textContext.length,
+      hasAnyContent,
+      usedPdfDirectMode: hasPdfFiles,
+      hasContext: hasAnyContent,
     };
-    console.log('[CHAT-DEBUG] ========== CHAT RESPONSE ==========', JSON.stringify(debugInfo, null, 2));
+    console.log('[CHAT] ========== CHAT RESPONSE ==========', JSON.stringify(debugInfo, null, 2));
 
     return NextResponse.json({
       id: assistantMessage.id,
@@ -283,11 +342,11 @@ export async function POST(request: NextRequest) {
       content: aiResponse,
       citations,
       createdAt: assistantMessage.createdAt,
-      hasContext: searchResults.length > 0,
+      hasContext: hasAnyContent,
       debug: debugInfo,
     });
   } catch (error) {
-    console.error('Chat error:', error);
+    console.error('[CHAT] FATAL ERROR:', error);
     return NextResponse.json(
       { error: 'Failed to process chat message', details: String(error) },
       { status: 500 }
@@ -313,8 +372,7 @@ export async function DELETE(request: NextRequest) {
 
 function extractCitations(
   response: string,
-  docNameMap: Map<string, string>,
-  searchResults: { documentId: string; pageNumber: number | null; text: string; documentName: string }[]
+  docNameMap: Map<string, string>
 ) {
   const citations: { documentName: string; page?: number; text?: string }[] = [];
   const seen = new Set<string>();
@@ -333,19 +391,6 @@ function extractCitations(
       citations.push({
         documentName: docName,
         page: pageMatch ? parseInt(pageMatch[1]) : undefined,
-      });
-    }
-  }
-
-  for (const chunk of searchResults.slice(0, 3)) {
-    const docName = docNameMap.get(chunk.documentId) || 'Unknown';
-    const key = `${docName}-p${chunk.pageNumber}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      citations.push({
-        documentName: docName,
-        page: chunk.pageNumber || undefined,
-        text: chunk.text.slice(0, 100) + '...',
       });
     }
   }

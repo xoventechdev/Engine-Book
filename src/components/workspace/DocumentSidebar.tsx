@@ -152,13 +152,15 @@ export function DocumentSidebar() {
           if (result.doc) {
             addDocument(result.doc)
           }
-          // Warn if parsing failed (0 chunks)
-          if (debug && !debug.parseOk) {
+          // For PDFs, no chunks are created — Gemini reads them directly
+          if (debug && !debug.isPdfDirectMode && !debug.parseOk) {
             toast({ 
               title: 'Uploaded but no text extracted', 
-              description: `${item.file.name} was saved but no text chunks were created. The file may be empty or image-only. Click the 🐛 button in AI Chat for diagnostics.`,
+              description: `${item.file.name} was saved but no text chunks were created. The file may be empty or image-only.`,
               variant: 'destructive' 
             })
+          } else if (debug?.isPdfDirectMode) {
+            toast({ title: 'Uploaded', description: `${item.file.name} — PDF ready for AI chat (direct mode)` })
           } else {
             toast({ title: 'Uploaded', description: `${item.file.name} ready for AI chat${chunkCount}` })
           }

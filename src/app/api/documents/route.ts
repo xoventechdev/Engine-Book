@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getFileType } from '@/lib/helpers';
-import { chunkByPages, chunkText } from '@/lib/chunker';
-import { extractPdfText } from '@/lib/pdf-parser';
+import { chunkText } from '@/lib/chunker';
 import path from 'path';
 import fs from 'fs';
 
@@ -37,7 +36,7 @@ export async function POST(request: NextRequest) {
     console.log(`[UPLOAD-DEBUG] ProjectId: ${projectId}, Discipline: ${discipline}`);
 
     if (!file || !projectId) {
-      console.log('[UPLOAD-DEBUG] ❌ Missing file or projectId');
+      console.log('[UPLOAD-DEBUG] Missing file or projectId');
       return NextResponse.json({ error: 'File and projectId are required' }, { status: 400 });
     }
 
@@ -45,7 +44,7 @@ export async function POST(request: NextRequest) {
     console.log(`[UPLOAD-DEBUG] Detected fileType: ${fileType}`);
 
     if (fileType === 'unknown') {
-      console.log('[UPLOAD-DEBUG] ❌ Unknown file type');
+      console.log('[UPLOAD-DEBUG] Unknown file type');
       return NextResponse.json(
         { error: 'Unsupported file type. Supported: PDF, DOCX, TXT, XLSX, CSV' },
         { status: 400 }
@@ -79,72 +78,58 @@ export async function POST(request: NextRequest) {
     });
     console.log(`[UPLOAD-DEBUG] Document record created: ${document.id}`);
 
-    // Parse and chunk the document — await so chunks are guaranteed before response
-    console.log(`[UPLOAD-DEBUG] Starting parseAndChunk for doc ${document.id}, type=${fileType}...`);
+    // For PDFs: skip text extraction entirely — Gemini will read the raw PDF directly
+    // For non-PDFs: parse and chunk now so they're searchable
     let chunkCount = 0;
-    try {
-      chunkCount = await parseAndChunk(document.id, absoluteFilePath, fileType);
-      console.log(`[UPLOAD-DEBUG] ✅ parseAndChunk returned ${chunkCount} chunks`);
-    } catch (err) {
-      console.error(`[UPLOAD-DEBUG] ❌ parseAndChunk THREW ERROR:`, err);
+    if (fileType !== 'pdf') {
+      console.log(`[UPLOAD-DEBUG] Starting text extraction for ${fileType}...`);
+      chunkCount = await parseAndChunkNonPdf(document.id, absoluteFilePath, fileType);
+      console.log(`[UPLOAD-DEBUG] Created ${chunkCount} text chunks`);
+    } else {
+      console.log(`[UPLOAD-DEBUG] PDF saved — will use Gemini native PDF reading at chat time`);
     }
 
-    // Verify chunks were actually created
-    const verifyChunks = await db.documentChunk.count({ where: { documentId: document.id } });
-    console.log(`[UPLOAD-DEBUG] Verification: ${verifyChunks} chunks in DB for doc ${document.id}`);
+    console.log(`[UPLOAD-DEBUG] ========== UPLOAD COMPLETE ==========`);
 
-    console.log(`[UPLOAD-DEBUG] ========== UPLOAD COMPLETE (${chunkCount} chunks) ==========\n`);
-
-    return NextResponse.json({ 
-      ...document, 
+    return NextResponse.json({
+      ...document,
       chunkCount,
       debug: {
         fileType,
         fileSize: fileBuffer.length,
         chunkCount,
-        verifiedChunks: verifyChunks,
-        parseOk: chunkCount > 0 || verifyChunks > 0,
+        isPdfDirectMode: fileType === 'pdf',
       }
     }, { status: 201 });
   } catch (error) {
-    console.error('[UPLOAD-DEBUG] ❌ FATAL UPLOAD ERROR:', error);
+    console.error('[UPLOAD-DEBUG] FATAL UPLOAD ERROR:', error);
     return NextResponse.json({ error: 'Failed to upload document' }, { status: 500 });
   }
 }
 
-async function parseAndChunk(documentId: string, absFilePath: string, fileType: string): Promise<number> {
+/**
+ * Parse and chunk non-PDF files (DOCX, TXT, XLSX, CSV).
+ * PDFs are NOT chunked — they are sent as raw base64 to Gemini at chat time.
+ */
+async function parseAndChunkNonPdf(documentId: string, absFilePath: string, fileType: string): Promise<number> {
   let fileBuffer: Buffer;
   try {
     fileBuffer = fs.readFileSync(absFilePath);
-    console.log(`[CHUNK-DEBUG]   Read file: ${fileBuffer.length} bytes`);
   } catch (err) {
-    console.error(`[CHUNK-DEBUG]   ❌ Cannot read file ${absFilePath}:`, err);
+    console.error(`[CHUNK-DEBUG] Cannot read file ${absFilePath}:`, err);
     return 0;
   }
 
-  let pages: { text: string; pageNumber: number }[] = [];
+  let fullText = '';
 
   try {
-    if (fileType === 'pdf') {
-      console.log(`[CHUNK-DEBUG]   Parsing as PDF...`);
-      const pdfResult = await extractPdfText(fileBuffer);
-      pages = pdfResult.pages.filter(p => p.text.trim().length > 0);
-      console.log(`[CHUNK-DEBUG]   PDF extracted: ${pdfResult.totalPages} total pages, ${pages.length} non-empty`);
-    } else if (fileType === 'docx') {
-      console.log(`[CHUNK-DEBUG]   Parsing as DOCX...`);
+    if (fileType === 'docx') {
       const mammoth = await import('mammoth');
       const result = await mammoth.extractRawText({ buffer: fileBuffer });
-      console.log(`[CHUNK-DEBUG]   DOCX extracted: ${result.value.length} chars`);
-      const pageChunks = splitTextIntoPages(result.value, 3000);
-      pages = pageChunks.map((text, i) => ({ text, pageNumber: i + 1 }));
+      fullText = result.value;
     } else if (fileType === 'txt') {
-      console.log(`[CHUNK-DEBUG]   Parsing as TXT...`);
-      const text = fileBuffer.toString('utf-8');
-      console.log(`[CHUNK-DEBUG]   TXT extracted: ${text.length} chars`);
-      const pageChunks = splitTextIntoPages(text, 3000);
-      pages = pageChunks.map((text, i) => ({ text, pageNumber: i + 1 }));
+      fullText = fileBuffer.toString('utf-8');
     } else if (fileType === 'xlsx' || fileType === 'csv') {
-      console.log(`[CHUNK-DEBUG]   Parsing as ${fileType.toUpperCase()}...`);
       const XLSX = await import('xlsx');
       let jsonData: string[][] = [];
       if (fileType === 'xlsx') {
@@ -161,32 +146,22 @@ async function parseAndChunk(documentId: string, absFilePath: string, fileType: 
           { header: 1 }
         ) as string[][];
       }
-      const text = jsonData.map((row) => row.filter(Boolean).join(' | ')).join('\n');
-      console.log(`[CHUNK-DEBUG]   ${fileType.toUpperCase()} extracted: ${text.length} chars, ${jsonData.length} rows`);
-      const pageChunks = splitTextIntoPages(text, 3000);
-      pages = pageChunks.map((text, i) => ({ text, pageNumber: i + 1 }));
+      fullText = jsonData.map((row) => row.filter(Boolean).join(' | ')).join('\n');
     }
 
-    console.log(`[CHUNK-DEBUG]   Total pages for chunking: ${pages.length}`);
+    if (!fullText.trim()) return 0;
 
-    // Generate chunks
-    const chunks = fileType === 'pdf'
-      ? chunkByPages(pages)
-      : pages.flatMap((p) =>
-          chunkText(p.text, 500, 50).map((c) => ({ ...c, pageNumber: p.pageNumber }))
-        );
+    // Split into page-sized chunks and store
+    const pages = splitTextIntoPages(fullText, 3000);
+    const chunks = pages.flatMap((p, pageIdx) =>
+      chunkText(p, 500, 50).map((c) => ({
+        ...c,
+        pageNumber: pageIdx + 1,
+      }))
+    );
 
-    console.log(`[CHUNK-DEBUG]   Generated ${chunks.length} chunks`);
-    for (let i = 0; i < Math.min(chunks.length, 3); i++) {
-      console.log(`[CHUNK-DEBUG]     Chunk ${i}: page=${chunks[i].pageNumber}, len=${chunks[i].text.length}, preview="${chunks[i].text.slice(0, 80).replace(/\n/g, '\\n')}"`);
-    }
-    if (chunks.length > 3) {
-      console.log(`[CHUNK-DEBUG]     ... and ${chunks.length - 3} more chunks`);
-    }
-
-    // Store chunks in database
     if (chunks.length > 0) {
-      const result = await db.documentChunk.createMany({
+      await db.documentChunk.createMany({
         data: chunks.map((chunk) => ({
           documentId,
           chunkIndex: chunk.index,
@@ -194,14 +169,11 @@ async function parseAndChunk(documentId: string, absFilePath: string, fileType: 
           text: chunk.text,
         })),
       });
-      console.log(`[CHUNK-DEBUG]   ✅ DB createMany returned count: ${result.count}`);
-    } else {
-      console.warn(`[CHUNK-DEBUG]   ⚠️  No chunks generated! Document text may be empty.`);
     }
 
     return chunks.length;
   } catch (error) {
-    console.error(`[CHUNK-DEBUG]   ❌ Error during parsing:`, error);
+    console.error(`[CHUNK-DEBUG] Error parsing ${fileType}:`, error);
     return 0;
   }
 }

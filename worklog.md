@@ -41,3 +41,23 @@ Stage Summary:
 - Works with any PDF including scanned/image-based ones (VLM does OCR)
 - No dependency on pdf-parse anymore
 - Added `canvas` to serverExternalPackages for native module support
+---
+Task ID: 2
+Agent: Main
+Task: Replace pdf-parse with Gemini native PDF base64, fix DropZone build error, add credentials to .env
+
+Work Log:
+- Created missing `src/components/upload/DropZone.tsx` — drag-and-drop upload with compact mode
+- Rewrote `src/app/api/documents/route.ts` — PDFs skip text extraction entirely (just save to disk)
+- Rewrote `src/app/api/chat/route.ts` — PDFs sent as `file_url` base64 to Gemini via `createVision`; non-PDFs use chunk-based text search
+- Updated `src/components/chat/ChatPanel.tsx` — debug panel now shows PDF direct mode info (pdfCount, pdfNames, usedPdfDirectMode)
+- Updated `src/components/workspace/DocumentSidebar.tsx` — removed false "no text extracted" warning for PDFs
+- Created `.env` with all credentials (DATABASE_URL, ZAI_BASE_URL, ZAI_API_KEY, ZAI_CHAT_ID, ZAI_USER_ID, ZAI_TOKEN)
+- Created `.z-ai-config` in project root (SDK reads this JSON for Gemini API credentials)
+- Created `.env.example` with placeholder values
+
+Stage Summary:
+- **PDF reading now works end-to-end** — verified with browser test: uploaded PDF → asked question → AI correctly identified document content with page citation
+- Architecture: PDF files are sent as raw base64 `file_url` parts to Gemini's `createVision` API — no client-side text extraction needed
+- Non-PDF files (TXT, DOCX, XLSX, CSV) still use chunk-based keyword search approach
+- Both approaches can be combined when a project has both PDF and non-PDF documents
