@@ -20,3 +20,24 @@ Stage Summary:
 - **FIX**: `serverExternalPackages: ["pdf-parse"]` in next.config.ts tells Turbopack to not bundle pdf-parse, loading it at runtime instead
 - **DROPZONE**: Re-created missing `/src/components/upload/DropZone.tsx` component
 - **DEBUG**: Added debug panel (🐛 button) in AI Chat that auto-opens when no context is found, showing document count, chunk count, search results, and per-document diagnostics
+
+---
+Task ID: 2
+Agent: Main
+Task: Replace pdf-parse with Gemini VLM for PDF text extraction
+
+Work Log:
+- Tried sending PDF as `file_url` data URI → API error 1214 "URL格式无效" (invalid URL format)
+- Tried sending PDF as `image_url` data URI → API error 1210 "图片输入格式/解析错误" (image format error)
+- Solution: Render PDF pages to PNG images using pdfjs-dist + canvas, then send PNGs to VLM
+- Installed `pdfjs-dist` and `canvas` packages
+- Fixed pdfjs-dist worker issue: set `GlobalWorkerOptions.workerSrc` to absolute path of worker.min.mjs
+- Added `canvas` to `serverExternalPackages` in next.config.ts (native C++ bindings)
+- Removed `pdf-parse` from serverExternalPackages (no longer used)
+- Full E2E test passed: upload PDF → VLM extracts text → chunk created → chat finds context
+
+Stage Summary:
+- `src/lib/pdf-parser.ts` now uses: pdfjs-dist (render) → canvas (PNG export) → z-ai-web-dev-sdk VLM (OCR)
+- Works with any PDF including scanned/image-based ones (VLM does OCR)
+- No dependency on pdf-parse anymore
+- Added `canvas` to serverExternalPackages for native module support
