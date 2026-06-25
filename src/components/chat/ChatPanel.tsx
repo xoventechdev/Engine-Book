@@ -277,7 +277,7 @@ export function ChatPanel() {
             <div className="mt-2 pt-2 border-t">
               <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Full Diagnostics</span>
               <div className="mt-1.5 space-y-1.5 text-[11px] font-mono">
-                {(debugData.documents as { filename: string; fileType: string; fileExists: boolean; chunkCount: number; chunksPreview?: { text: string }[] }[]).map(d => (
+                {(debugData.documents as { filename: string; fileType: string; fileExists: boolean; chunkCount: number; chunksPreview?: { preview?: string }[] }[]).map(d => (
                   <div key={d.filename} className="rounded bg-background p-1.5 border">
                     <div className="flex items-center gap-1.5">
                       <span className={d.fileExists ? 'text-emerald-500' : 'text-destructive'}>{d.fileExists ? '●' : '○'}</span>
@@ -286,8 +286,8 @@ export function ChatPanel() {
                     </div>
                     <div className="flex gap-3 mt-0.5 text-muted-foreground">
                       <span>chunks: {d.chunkCount}</span>
-                      {d.chunksPreview && d.chunksPreview.length > 0 && (
-                        <span className="truncate">text: &quot;{d.chunksPreview[0].text.slice(0, 80)}&quot;</span>
+                      {d.chunksPreview?.[0]?.preview && (
+                        <span className="truncate">text: &quot;{d.chunksPreview[0].preview.slice(0, 80)}&quot;</span>
                       )}
                     </div>
                   </div>
