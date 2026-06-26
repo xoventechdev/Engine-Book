@@ -1,20 +1,30 @@
 'use client'
 
+import { useState } from 'react'
 import { useAppStore, type Discipline } from '@/store/useAppStore'
-import { ArrowLeft, FileText, BookOpen } from 'lucide-react'
+import { ArrowLeft, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTheme } from 'next-themes'
-import { Moon, Sun, GitCompare, Network, FileBarChart2 } from 'lucide-react'
+import { Moon, Sun, GitCompare, Network, FileBarChart2, Settings2, Headphones, StickyNote, GraduationCap } from 'lucide-react'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { SettingsDialog } from '@/components/settings/SettingsDialog'
+import { AudioOverviewDialog } from '@/components/audio/AudioOverviewDialog'
+import { StudyGuideDialog } from '@/components/study/StudyGuideDialog'
+import { NotesPanel } from '@/components/notes/NotesPanel'
+import { UserMenu } from '@/components/auth/UserMenu'
 
 export function WorkspaceToolbar() {
   const { currentProject, setViewMode, setCurrentProject, setDocuments, setChatMessages, setSelectedDocumentId } = useAppStore()
   const { theme, setTheme } = useTheme()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [audioOpen, setAudioOpen] = useState(false)
+  const [studyGuideOpen, setStudyGuideOpen] = useState(false)
+  const [notesOpen, setNotesOpen] = useState(false)
 
   const handleBack = () => {
     setViewMode('dashboard')
@@ -44,6 +54,23 @@ export function WorkspaceToolbar() {
         </div>
 
         <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 h-8 text-xs"
+                onClick={() => setAudioOpen(true)}
+              >
+                <Headphones className="h-3.5 w-3.5" />
+                <span className="hidden md:inline">Audio</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Audio Overview (podcast)</TooltipContent>
+          </Tooltip>
+
+          <div className="w-px h-5 bg-border mx-1" />
+
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -89,6 +116,36 @@ export function WorkspaceToolbar() {
             <TooltipContent>Generate Report</TooltipContent>
           </Tooltip>
 
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 h-8 text-xs"
+                onClick={() => setStudyGuideOpen(true)}
+              >
+                <GraduationCap className="h-3.5 w-3.5" />
+                <span className="hidden md:inline">Study</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Study Guide</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 h-8 text-xs"
+                onClick={() => setNotesOpen(true)}
+              >
+                <StickyNote className="h-3.5 w-3.5" />
+                <span className="hidden md:inline">Notes</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Saved Notes</TooltipContent>
+          </Tooltip>
+
           <div className="w-px h-5 bg-border mx-1" />
 
           <Tooltip>
@@ -105,8 +162,44 @@ export function WorkspaceToolbar() {
             </TooltipTrigger>
             <TooltipContent>Toggle theme</TooltipContent>
           </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setSettingsOpen(true)}
+              >
+                <Settings2 className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>AI Settings</TooltipContent>
+          </Tooltip>
+
+          <div className="w-px h-5 bg-border mx-1" />
+
+          <UserMenu />
         </div>
       </header>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <AudioOverviewDialog
+        open={audioOpen}
+        onOpenChange={setAudioOpen}
+        projectId={currentProject.id}
+        projectName={currentProject.name}
+      />
+      <StudyGuideDialog
+        open={studyGuideOpen}
+        onOpenChange={setStudyGuideOpen}
+        projectId={currentProject.id}
+        projectName={currentProject.name}
+      />
+      <NotesPanel
+        open={notesOpen}
+        onOpenChange={setNotesOpen}
+      />
     </TooltipProvider>
   )
 }

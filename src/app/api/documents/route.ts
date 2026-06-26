@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getFileType } from '@/lib/helpers';
 import { chunkText } from '@/lib/chunker';
+import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
 import path from 'path';
 import fs from 'fs';
 
@@ -11,6 +12,11 @@ export async function GET(request: NextRequest) {
     if (!projectId) {
       return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
     }
+
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(projectId, ownerId);
+    if (!project) return notOwnedResponse();
 
     const documents = await db.document.findMany({
       where: { projectId },
@@ -31,20 +37,27 @@ export async function POST(request: NextRequest) {
     const projectId = formData.get('projectId') as string | null;
     const discipline = (formData.get('discipline') as string) || 'General';
 
-    console.log(`\n[UPLOAD-DEBUG] ========== NEW UPLOAD REQUEST ==========`);
-    console.log(`[UPLOAD-DEBUG] File: ${file?.name}, Size: ${file?.size}, Type: ${file?.type}`);
-    console.log(`[UPLOAD-DEBUG] ProjectId: ${projectId}, Discipline: ${discipline}`);
-
     if (!file || !projectId) {
-      console.log('[UPLOAD-DEBUG] Missing file or projectId');
       return NextResponse.json({ error: 'File and projectId are required' }, { status: 400 });
     }
 
+    // Reject files larger than 25 MB
+    const MAX_FILE_SIZE = 25 * 1024 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { error: `File too large. Maximum size is 25 MB. (${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MB)` },
+        { status: 413 }
+      );
+    }
+
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(projectId, ownerId);
+    if (!project) return notOwnedResponse();
+
     const fileType = getFileType(file.name);
-    console.log(`[UPLOAD-DEBUG] Detected fileType: ${fileType}`);
 
     if (fileType === 'unknown') {
-      console.log('[UPLOAD-DEBUG] Unknown file type');
       return NextResponse.json(
         { error: 'Unsupported file type. Supported: PDF, DOCX, TXT, XLSX, CSV' },
         { status: 400 }
@@ -53,7 +66,6 @@ export async function POST(request: NextRequest) {
 
     // Save file to disk
     const fileBuffer = Buffer.from(await file.arrayBuffer());
-    console.log(`[UPLOAD-DEBUG] File buffer created, size: ${fileBuffer.length} bytes`);
 
     const uploadDir = path.join(process.cwd(), 'db', 'uploads', projectId);
     if (!fs.existsSync(uploadDir)) {
@@ -62,8 +74,6 @@ export async function POST(request: NextRequest) {
     const absoluteFilePath = path.join(uploadDir, file.name);
     fs.writeFileSync(absoluteFilePath, fileBuffer);
     const relativeFilePath = path.join('db', 'uploads', projectId, file.name);
-    console.log(`[UPLOAD-DEBUG] File saved to: ${absoluteFilePath}`);
-    console.log(`[UPLOAD-DEBUG] File exists on disk: ${fs.existsSync(absoluteFilePath)}`);
 
     // Create document record
     const document = await db.document.create({
@@ -82,14 +92,8 @@ export async function POST(request: NextRequest) {
     // For non-PDFs: parse and chunk now so they're searchable
     let chunkCount = 0;
     if (fileType !== 'pdf') {
-      console.log(`[UPLOAD-DEBUG] Starting text extraction for ${fileType}...`);
       chunkCount = await parseAndChunkNonPdf(document.id, absoluteFilePath, fileType);
-      console.log(`[UPLOAD-DEBUG] Created ${chunkCount} text chunks`);
-    } else {
-      console.log(`[UPLOAD-DEBUG] PDF saved — will use Gemini native PDF reading at chat time`);
     }
-
-    console.log(`[UPLOAD-DEBUG] ========== UPLOAD COMPLETE ==========`);
 
     return NextResponse.json({
       ...document,
@@ -102,7 +106,7 @@ export async function POST(request: NextRequest) {
       }
     }, { status: 201 });
   } catch (error) {
-    console.error('[UPLOAD-DEBUG] FATAL UPLOAD ERROR:', error);
+    console.error('Upload error:', error);
     return NextResponse.json({ error: 'Failed to upload document' }, { status: 500 });
   }
 }

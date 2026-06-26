@@ -10,6 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/hooks/use-toast'
 import { ArrowLeft, Network, Loader2, Filter, Sparkles } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { loadAISettings } from '@/lib/client-settings'
 
 const NODE_COLORS: Record<string, string> = {
   Equipment: '#10b981',
@@ -35,14 +36,21 @@ export function KnowledgeGraphView() {
     setSelectedNode(null)
 
     try {
+      const aiSettings = loadAISettings()
       const res = await fetch('/api/graph', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: currentProject.id }),
+        body: JSON.stringify({
+          projectId: currentProject.id,
+          ...(aiSettings ? { settings: aiSettings } : {}),
+        }),
       })
 
       if (!res.ok) {
         const err = await res.json()
+        if (err.needsSettings) {
+          toast({ title: 'AI Settings needed', description: 'Add your API key in Settings first.', variant: 'destructive' })
+        }
         throw new Error(err.error || 'Failed to generate graph')
       }
 
@@ -98,7 +106,7 @@ export function KnowledgeGraphView() {
     return [...nodes, ...edges]
   })()
 
-  const cyStyles: cytoscape.Stylesheet[] = [
+  const cyStyles: cytoscape.StylesheetStyle[] = [
     {
       selector: 'node',
       style: {

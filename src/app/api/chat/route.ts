@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { searchChunks, chunkText } from '@/lib/chunker';
-import ZAI from 'z-ai-web-dev-sdk';
+import { generateChatWithFiles, getAISettings, parseAISettings, AIConfigError, type AIFile } from '@/lib/ai';
+import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
 import path from 'path';
 import fs from 'fs';
 
@@ -21,6 +22,11 @@ export async function GET(request: NextRequest) {
     if (!projectId) {
       return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
     }
+
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(projectId, ownerId);
+    if (!project) return notOwnedResponse();
 
     const messages = await db.chatMessage.findMany({
       where: { projectId },
@@ -42,15 +48,21 @@ export async function GET(request: NextRequest) {
 // POST: Send a chat message
 export async function POST(request: NextRequest) {
   try {
-    const { projectId, message, disciplineFilter } = await request.json();
+    const { projectId, message, disciplineFilter, settings: bodySettings } = await request.json();
 
-    console.log(`\n[CHAT] ========== NEW CHAT REQUEST ==========`);
-    console.log(`[CHAT] Project: ${projectId}, Message: "${message?.slice(0, 100)}"`);
-    console.log(`[CHAT] Discipline filter: ${disciplineFilter || 'none'}`);
 
     if (!projectId || !message) {
       return NextResponse.json({ error: 'projectId and message are required' }, { status: 400 });
     }
+
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(projectId, ownerId);
+    if (!project) return notOwnedResponse();
+
+    // Use client-supplied browser settings (24h localStorage) if present,
+    // otherwise fall back to server-side getAISettings().
+    const settings = parseAISettings(bodySettings) ?? (await getAISettings());
 
     // 1. Retrieve documents
     const documents = await db.document.findMany({
@@ -63,18 +75,15 @@ export async function POST(request: NextRequest) {
       select: { id: true, filename: true, fileType: true, filePath: true },
     });
 
-    console.log(`[CHAT] Found ${documents.length} documents`);
     for (const d of documents) {
-      console.log(`[CHAT]   - ${d.filename} (type=${d.fileType})`);
     }
 
-    const docNameMap = new Map(documents.map((d) => [d.id, d.filename]));
+    const docNameMap = new Map<string, string>(documents.map((d) => [d.id, d.filename] as [string, string]));
 
     // 2. Separate PDFs (sent as raw files to Gemini) from non-PDFs (text chunks)
     const pdfDocs = documents.filter((d) => d.fileType === 'pdf');
     const nonPdfDocs = documents.filter((d) => d.fileType !== 'pdf');
 
-    console.log(`[CHAT] PDFs: ${pdfDocs.length}, Non-PDFs: ${nonPdfDocs.length}`);
 
     // 3. For non-PDFs: get or create text chunks, then keyword-search
     let textContext = '';
@@ -93,19 +102,16 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      console.log(`[CHAT] Non-PDF chunks in DB: ${chunks.length}`);
 
       // Re-chunk documents that have none (e.g. newly uploaded DOCX/TXT/XLSX/CSV)
       const chunkedDocIds = new Set(chunks.map((c) => c.documentId));
       const unchunkedDocs = nonPdfDocs.filter((d) => !chunkedDocIds.has(d.id));
 
       if (unchunkedDocs.length > 0) {
-        console.log(`[CHAT] Re-chunking ${unchunkedDocs.length} non-PDF documents...`);
         for (const doc of unchunkedDocs) {
           try {
             const absPath = path.join(process.cwd(), doc.filePath);
             if (!fs.existsSync(absPath)) {
-              console.log(`[CHAT]   File not found: ${absPath}`);
               continue;
             }
             const fileBuffer = fs.readFileSync(absPath);
@@ -175,7 +181,6 @@ export async function POST(request: NextRequest) {
         10
       );
 
-      console.log(`[CHAT] Search returned ${searchResults.length} chunks for non-PDFs`);
 
       if (searchResults.length > 0) {
         const contextParts = searchResults.map(
@@ -186,38 +191,21 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 4. For PDFs: read files from disk and prepare as base64 file_url parts
-    const pdfFileParts: { type: 'file_url'; file_url: { url: string } }[] = [];
+    // 4. For PDFs: scan disk to find which are present (the raw bytes are
+//    re-read inside the AI dispatcher below as AIFile[]). We only need
+//    the list of names + a presence flag for prompt construction here.
     const pdfNames: string[] = [];
-
     for (const doc of pdfDocs) {
-      try {
-        const absPath = path.join(process.cwd(), doc.filePath);
-        if (!fs.existsSync(absPath)) {
-          console.log(`[CHAT] PDF file not found: ${absPath}`);
-          continue;
-        }
-        const fileBuffer = fs.readFileSync(absPath);
-        const base64 = fileBuffer.toString('base64');
-        const dataUrl = `data:application/pdf;base64,${base64}`;
-
-        pdfFileParts.push({
-          type: 'file_url',
-          file_url: { url: dataUrl },
-        });
-        pdfNames.push(doc.filename);
-        console.log(`[CHAT] PDF loaded: ${doc.filename} (${fileBuffer.length} bytes, ${base64.length} chars base64)`);
-      } catch (err) {
-        console.error(`[CHAT] Failed to read PDF ${doc.filename}:`, err);
-      }
+      const absPath = path.join(process.cwd(), doc.filePath);
+      if (fs.existsSync(absPath)) pdfNames.push(doc.filename);
     }
+    const presentPdfCount = pdfNames.length;
 
     // 5. Build the prompt with text context from non-PDFs
-    const hasPdfFiles = pdfFileParts.length > 0;
+    const hasPdfFiles = presentPdfCount > 0;
     const hasTextContext = textContext.length > 0;
     const hasAnyContent = hasPdfFiles || hasTextContext;
 
-    console.log(`[CHAT] Final state: ${pdfFileParts.length} PDFs, text context: ${textContext.length} chars, total docs: ${documents.length}`);
 
     // 6. Get conversation history (last 10 messages)
     const history = await db.chatMessage.findMany({
@@ -232,79 +220,57 @@ export async function POST(request: NextRequest) {
       content: msg.content,
     }));
 
-    // 7. Call LLM
-    const zai = await ZAI.create();
+    // 7. Call LLM (provider-agnostic — uses the resolved settings above)
     let aiResponse: string;
 
-    if (hasPdfFiles) {
-      // === USE VISION API: send PDFs as file_url parts ===
-      console.log(`[CHAT] Using createVision with ${pdfFileParts.length} PDF file(s)`);
-
-      // Build the user message content parts
-      const userContentParts: { type: string; text?: string; file_url?: { url: string } }[] = [];
-
-      // Add text prompt with context
-      let userText = '';
-      if (hasTextContext) {
-        userText = `You have been provided with ${pdfFileParts.length} PDF document(s) (${pdfNames.join(', ')}) AND the following extracted text from other files:\n\n${textContext}\n\n---\n\nUser question: ${message}`;
-      } else {
-        userText = `You have been provided with ${pdfFileParts.length} PDF document(s) (${pdfNames.join(', ')}).\n\nUser question: ${message}`;
-      }
-      userContentParts.push({ type: 'text', text: userText });
-
-      // Add PDF file parts
-      userContentParts.push(...pdfFileParts);
-
-      // Build vision messages
-      const visionMessages: { role: string; content: string | any[] }[] = [
-        { role: 'assistant', content: CHAT_SYSTEM_PROMPT },
-      ];
-
-      for (const msg of conversationHistory) {
-        visionMessages.push({ role: msg.role, content: msg.content });
-      }
-
-      visionMessages.push({
-        role: 'user',
-        content: userContentParts,
-      });
-
-      console.log(`[CHAT] Sending ${visionMessages.length} messages to createVision (${userText.length} chars text + ${pdfFileParts.length} PDFs)`);
-
-      const completion = await zai.chat.completions.createVision({
-        messages: visionMessages as any,
-        thinking: { type: 'disabled' },
-      });
-
-      aiResponse = completion.choices[0]?.message?.content || 'No response generated.';
+    // Build the universal message list. The system prompt goes first, then
+    // conversation history, then the user's new turn (with document context).
+    let userText = '';
+    if (hasPdfFiles && hasTextContext) {
+      userText = `You have been provided with ${presentPdfCount} PDF document(s) (${pdfNames.join(', ')}) AND the following extracted text from other files:\n\n${textContext}\n\n---\n\nUser question: ${message}`;
+    } else if (hasPdfFiles) {
+      userText = `You have been provided with ${presentPdfCount} PDF document(s) (${pdfNames.join(', ')}).\n\nUser question: ${message}`;
+    } else if (hasTextContext) {
+      userText = `Context from uploaded documents:\n\n${textContext}\n\n---\n\nUser question: ${message}`;
     } else {
-      // === FALLBACK: text-only LLM call (no PDFs) ===
-      console.log(`[CHAT] Using createVision (text only, ${textContext.length} chars context)`);
-
-      const userMessageWithContext = hasTextContext
-        ? `Context from uploaded documents:\n\n${textContext}\n\n---\n\nUser question: ${message}`
-        : `No document context was found. The user has uploaded ${documents.length} document(s) but no content could be extracted.\n\nUser question: ${message}`;
-
-      const llmMessages: { role: string; content: string }[] = [
-        { role: 'assistant', content: CHAT_SYSTEM_PROMPT },
-      ];
-
-      for (const msg of conversationHistory) {
-        llmMessages.push({ role: msg.role, content: msg.content });
-      }
-
-      llmMessages.push({ role: 'user', content: userMessageWithContext });
-
-      const completion = await zai.chat.completions.createVision({
-        messages: llmMessages as any,
-        thinking: { type: 'disabled' },
-      });
-
-      aiResponse = completion.choices[0]?.message?.content || 'No response generated.';
+      userText = `No document context was found. The user has uploaded ${documents.length} document(s) but no content could be extracted.\n\nUser question: ${message}`;
     }
 
-    console.log(`[CHAT] LLM response: ${aiResponse.length} chars`);
-    console.log(`[CHAT] AI preview: "${aiResponse.slice(0, 150).replace(/\n/g, '\\n')}"`);
+    const llmMessages = [
+      { role: 'system' as const, content: CHAT_SYSTEM_PROMPT },
+      ...conversationHistory.map((msg) => ({ role: msg.role, content: msg.content })),
+      { role: 'user' as const, content: userText },
+    ];
+
+    // Build the AIFile[] for providers that support inline binary blobs
+    // (Gemini & Anthropic). For OpenAI-compatible providers, files are
+    // gracefully ignored by ai.ts and the user text carries the context.
+    const aiFiles: AIFile[] = [];
+    for (const doc of pdfDocs) {
+      try {
+        const absPath = path.join(process.cwd(), doc.filePath);
+        if (!fs.existsSync(absPath)) continue;
+        aiFiles.push({
+          filename: doc.filename,
+          mimeType: 'application/pdf',
+          data: fs.readFileSync(absPath),
+        });
+      } catch (err) {
+        console.error(`[CHAT] Failed to read PDF ${doc.filename}:`, err);
+      }
+    }
+
+
+    try {
+      aiResponse = await generateChatWithFiles(llmMessages, aiFiles, undefined, settings);
+    } catch (aiErr) {
+      const e = aiErr as Error & { status?: number };
+      console.error('[CHAT] generateChatWithFiles THREW:', e?.name, e?.message, e?.status);
+      console.error(e?.stack);
+      throw aiErr;
+    }
+    if (!aiResponse) aiResponse = 'No response generated.';
+
 
     // 8. Extract citations from response
     const citations = extractCitations(aiResponse, docNameMap);
@@ -334,7 +300,6 @@ export async function POST(request: NextRequest) {
       usedPdfDirectMode: hasPdfFiles,
       hasContext: hasAnyContent,
     };
-    console.log('[CHAT] ========== CHAT RESPONSE ==========', JSON.stringify(debugInfo, null, 2));
 
     return NextResponse.json({
       id: assistantMessage.id,
@@ -347,6 +312,9 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('[CHAT] FATAL ERROR:', error);
+    if (error instanceof AIConfigError) {
+      return NextResponse.json({ error: error.message, needsSettings: true }, { status: 400 });
+    }
     return NextResponse.json(
       { error: 'Failed to process chat message', details: String(error) },
       { status: 500 }
@@ -361,6 +329,11 @@ export async function DELETE(request: NextRequest) {
     if (!projectId) {
       return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
     }
+
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(projectId, ownerId);
+    if (!project) return notOwnedResponse();
 
     await db.chatMessage.deleteMany({ where: { projectId } });
     return NextResponse.json({ success: true });

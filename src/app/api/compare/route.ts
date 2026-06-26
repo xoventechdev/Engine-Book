@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import path from 'path';
-import fs from 'fs';
-import ZAI from 'z-ai-web-dev-sdk';
-import { extractPdfText } from '@/lib/pdf-parser';
+import { generateChat, parseAISettings, AIConfigError } from '@/lib/ai';
+import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
+import { extractDocumentText } from '@/lib/document-text';
 
 const COMPARE_SYSTEM_PROMPT = `You are an expert at comparing engineering document revisions.
 Compare the two document texts provided and identify all differences.
@@ -23,7 +22,7 @@ No preamble. Only valid JSON.`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { documentAId, documentBId } = await request.json();
+    const { documentAId, documentBId, settings: bodySettings } = await request.json();
 
     if (!documentAId || !documentBId) {
       return NextResponse.json(
@@ -31,6 +30,10 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const settings = parseAISettings(bodySettings) ?? undefined;
 
     // Get document metadata
     const [docA, docB] = await Promise.all([
@@ -42,10 +45,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'One or both documents not found' }, { status: 404 });
     }
 
-    // Extract text from both documents
+    // Verify ownership of both documents' parent projects
+    const [projA, projB] = await Promise.all([
+      getOwnedProject(docA.projectId, ownerId),
+      getOwnedProject(docB.projectId, ownerId),
+    ]);
+    if (!projA || !projB) return notOwnedResponse();
+
+    // Extract text from both documents (shared helper handles PDF OCR fallback)
     const [textA, textB] = await Promise.all([
-      extractDocumentText(docA),
-      extractDocumentText(docB),
+      extractDocumentText(docA, settings),
+      extractDocumentText(docB, settings),
     ]);
 
     if (!textA.trim() && !textB.trim()) {
@@ -55,20 +65,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use LLM to compare
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'assistant', content: COMPARE_SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `Document A (${docA.filename}):\n${textA.slice(0, 8000)}\n\n---\n\nDocument B (${docB.filename}):\n${textB.slice(0, 8000)}`,
-        },
-      ],
-      thinking: { type: 'disabled' },
-    });
+    // Use LLM to compare (use same text window for AI + diff for consistency)
+    const windowA = textA.slice(0, 8000);
+    const windowB = textB.slice(0, 8000);
 
-    const rawResponse = completion.choices[0]?.message?.content || '{}';
+    const completionText = await generateChat([
+      { role: 'system', content: COMPARE_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `Document A (${docA.filename}):\n${windowA}\n\n---\n\nDocument B (${docB.filename}):\n${windowB}`,
+      },
+    ], undefined, settings);
+
+    const rawResponse = completionText || '{}';
 
     let comparisonResult;
     try {
@@ -80,7 +89,7 @@ export async function POST(request: NextRequest) {
 
     // Also compute a text-level diff
     const { diffWords } = await import('diff');
-    const diffResult = diffWords(textA.slice(0, 5000), textB.slice(0, 5000));
+    const diffResult = diffWords(windowA, windowB);
 
     return NextResponse.json({
       documentA: { id: docA.id, filename: docA.filename },
@@ -95,47 +104,12 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Compare error:', error);
+    if (error instanceof AIConfigError) {
+      return NextResponse.json({ error: error.message, needsSettings: true }, { status: 400 });
+    }
     return NextResponse.json(
       { error: 'Failed to compare documents', details: String(error) },
       { status: 500 }
     );
   }
-}
-
-async function extractDocumentText(doc: { id: string; fileType: string; filePath: string }): Promise<string> {
-  // First try to get text from chunks
-  const chunks = await db.documentChunk.findMany({
-    where: { documentId: doc.id },
-    orderBy: { chunkIndex: 'asc' },
-    select: { text: true },
-  });
-
-  if (chunks.length > 0) {
-    return chunks.map((c) => c.text).join('\n\n');
-  }
-
-  // Fallback: parse from file
-  const absPath = path.join(process.cwd(), doc.filePath);
-  if (!fs.existsSync(absPath)) return '';
-
-  const fileBuffer = fs.readFileSync(absPath);
-
-  if (doc.fileType === 'pdf') {
-    const pdfResult = await extractPdfText(fileBuffer);
-    return pdfResult.fullText;
-  } else if (doc.fileType === 'docx') {
-    const mammoth = await import('mammoth');
-    const result = await mammoth.extractRawText({ buffer: fileBuffer });
-    return result.value;
-  } else if (doc.fileType === 'txt') {
-    return fileBuffer.toString('utf-8');
-  } else if (doc.fileType === 'xlsx' || doc.fileType === 'csv') {
-    const XLSX = await import('xlsx');
-    const workbook = XLSX.read(fileBuffer);
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as string[][];
-    return rows.map((r) => r.join(' | ')).join('\n');
-  }
-
-  return '';
 }

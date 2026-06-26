@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -119,4 +120,39 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Markdown / prose styling for chat answers, document viewer, and reports */
+.prose {
+  --tw-prose-links: var(--color-primary);
+  --tw-prose-bold: var(--color-foreground);
+  --tw-prose-counters: var(--color-muted-foreground);
+  --tw-prose-quotes: var(--color-foreground);
+  --tw-prose-quote-borders: var(--color-border);
+  --tw-prose-code: var(--color-foreground);
+  --tw-prose-pre-bg: var(--color-muted);
+  --tw-prose-pre-code: var(--color-foreground);
+}
+.prose pre {
+  @apply rounded-lg border;
+}
+.prose code::before,
+.prose code::after {
+  content: none;
+}
+.prose code {
+  @apply rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-medium;
+}
+.prose pre code {
+  @apply bg-transparent p-0;
+}
+.prose table {
+  @apply w-full;
+}
+.prose th,
+.prose td {
+  @apply border border-border px-3 py-1.5;
+}
+.prose th {
+  @apply bg-muted font-semibold;
 }

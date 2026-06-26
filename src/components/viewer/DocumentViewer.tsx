@@ -1,48 +1,60 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { FileText, FileSpreadsheet, AlertCircle } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/use-toast'
 
-interface DocumentViewerProps {
-  onCitationClick?: (docName: string, page?: number) => void
-}
-
-export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
-  const { selectedDocumentId, documents, currentProject } = useAppStore()
+export function DocumentViewer() {
+  const { selectedDocumentId, documents, jumpTarget, setJumpTarget } = useAppStore()
   const [content, setContent] = useState<string | null>(null)
   const [contentType, setContentType] = useState<'pdf' | 'html' | 'table' | 'text' | null>(null)
   const [tableData, setTableData] = useState<Record<string, string[][]> | null>(null)
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
   const { toast } = useToast()
+  const blobRef = useRef<string | null>(null)
 
   const selectedDoc = documents.find((d) => d.id === selectedDocumentId)
 
+  // Cleanup blob URL on unmount
   useEffect(() => {
-    // Cleanup blob URL when changing documents
     return () => {
-      if (pdfBlobUrl) {
-        URL.revokeObjectURL(pdfBlobUrl)
+      if (blobRef.current) {
+        URL.revokeObjectURL(blobRef.current)
+        blobRef.current = null
       }
     }
-  }, [selectedDocumentId])
+  }, [])
 
+  // Load content when document or retry changes
   useEffect(() => {
     if (!selectedDocumentId) {
       setContent(null)
       setContentType(null)
       setTableData(null)
-      if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl)
+      setError(null)
+      if (blobRef.current) {
+        URL.revokeObjectURL(blobRef.current)
+        blobRef.current = null
+      }
       setPdfBlobUrl(null)
       return
     }
+
+    // If this is a jump-to-page request for a different doc, don't reload
+    // (the selection effect above already handled it). Only reload if the
+    // document actually changed (not just a page jump).
+    if (jumpTarget && jumpTarget.documentId === selectedDocumentId && pdfBlobUrl) {
+      // Already loaded this PDF — just update the page hash
+      return
+    }
+
+    let cancelled = false
 
     const loadContent = async () => {
       setLoading(true)
@@ -54,13 +66,17 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
           throw new Error('Failed to load document content')
         }
 
+        if (cancelled) return
+
         const contentTypeHeader = res.headers.get('content-type')
 
         if (contentTypeHeader?.includes('application/pdf')) {
-          // PDF - create blob URL
+          // PDF - create blob URL (revoke previous first)
           const blob = await res.blob()
-          if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl)
+          if (cancelled) return
+          if (blobRef.current) URL.revokeObjectURL(blobRef.current)
           const url = URL.createObjectURL(blob)
+          blobRef.current = url
           setPdfBlobUrl(url)
           setContentType('pdf')
           setContent(null)
@@ -68,6 +84,11 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
         } else {
           // JSON response (HTML, table, or text)
           const data = await res.json()
+          if (cancelled) return
+          if (blobRef.current) {
+            URL.revokeObjectURL(blobRef.current)
+            blobRef.current = null
+          }
           setPdfBlobUrl(null)
 
           if (data.type === 'html') {
@@ -85,15 +106,23 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
           }
         }
       } catch (err) {
+        if (cancelled) return
         setError(err instanceof Error ? err.message : 'Failed to load document')
         toast({ title: 'Error', description: 'Failed to load document content', variant: 'destructive' })
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     loadContent()
-  }, [selectedDocumentId])
+    return () => { cancelled = true }
+  }, [selectedDocumentId, retryCount, jumpTarget, pdfBlobUrl, toast])
+
+  const handleRetry = () => {
+    setError(null)
+    setContent(null)
+    setRetryCount((c) => c + 1)
+  }
 
   if (!selectedDocumentId) {
     return (
@@ -119,8 +148,8 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
         <Skeleton className="h-6 w-48" />
         <Skeleton className="h-4 w-32" />
         <div className="space-y-3 mt-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-4 w-full" style={{ width: `${90 - Math.random() * 20}%` }} />
+          {[90, 75, 85, 70, 80, 65, 88, 72].map((w, i) => (
+            <Skeleton key={i} className="h-4" style={{ width: `${w}%` }} />
           ))}
         </div>
       </div>
@@ -133,9 +162,7 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
         <div className="text-center space-y-3">
           <AlertCircle className="h-8 w-8 text-destructive mx-auto" />
           <p className="text-sm text-destructive">{error}</p>
-          <Button variant="outline" size="sm" onClick={() => {
-            setContent(null); setError(null)
-          }}>
+          <Button variant="outline" size="sm" onClick={handleRetry}>
             Retry
           </Button>
         </div>
@@ -159,7 +186,8 @@ export function DocumentViewer({ onCitationClick }: DocumentViewerProps) {
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {contentType === 'pdf' && pdfBlobUrl && (
           <iframe
-            src={pdfBlobUrl}
+            key={jumpTarget ? `${selectedDocumentId}-p${jumpTarget.page}` : selectedDocumentId}
+            src={pdfBlobUrl + (jumpTarget ? `#page=${jumpTarget.page}` : '')}
             className="w-full h-full border-0"
             title={selectedDoc?.filename || 'PDF Viewer'}
           />

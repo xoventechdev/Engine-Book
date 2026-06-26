@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
 import path from 'path';
 import fs from 'fs';
 
@@ -14,6 +15,11 @@ export async function GET(
     if (!document) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
+
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(document.projectId, ownerId);
+    if (!project) return notOwnedResponse();
 
     return NextResponse.json(document);
   } catch (error) {
@@ -33,6 +39,11 @@ export async function DELETE(
     if (!document) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
+
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(document.projectId, ownerId);
+    if (!project) return notOwnedResponse();
 
     // Delete file from disk
     try {

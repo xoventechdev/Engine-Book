@@ -1,12 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useAppStore, type ChatMessage as ChatMessageType, type Citation } from '@/store/useAppStore'
+import { useAppStore } from '@/store/useAppStore'
 import { ChatMessage } from '@/components/chat/ChatMessage'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
-import { Send, Trash2, MessageSquare, Loader2, Sparkles, Bug } from 'lucide-react'
+import { Send, Trash2, MessageSquare, Loader2, Sparkles, Bug, Settings2, Bot } from 'lucide-react'
+import { loadAISettings } from '@/lib/client-settings'
+import { SettingsDialog } from '@/components/settings/SettingsDialog'
 
 export function ChatPanel() {
   const {
@@ -18,14 +20,17 @@ export function ChatPanel() {
     setChatLoading,
     disciplineFilter,
     documents,
+    setSelectedDocumentId,
+    setJumpTarget,
+    addNote,
   } = useAppStore()
 
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { toast } = useToast()
   const [showDebug, setShowDebug] = useState(false)
   const [lastDebug, setLastDebug] = useState<Record<string, unknown> | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const projectId = currentProject?.id
 
@@ -71,6 +76,8 @@ export function ChatPanel() {
 
     setChatLoading(true)
 
+    const aiSettings = loadAISettings()
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -79,11 +86,19 @@ export function ChatPanel() {
           projectId,
           message,
           disciplineFilter: disciplineFilter === 'All' ? null : disciplineFilter,
+          ...(aiSettings ? { settings: aiSettings } : {}),
         }),
       })
 
       if (!res.ok) {
-        const err = await res.json()
+        const err = await res.json().catch(() => ({}))
+        if (err.needsSettings) {
+          setSettingsOpen(true)
+        }
+        if (err.needsAuth) {
+          toast({ title: 'Session expired', description: 'Please sign in again', variant: 'destructive' })
+          return
+        }
         throw new Error(err.error || 'Failed to get response')
       }
 
@@ -121,9 +136,39 @@ export function ChatPanel() {
     }
   }
 
-  const handleCitationClick = (_docName: string, _page?: number) => {
-    // Could navigate to the document and page
-    toast({ title: 'Citation', description: `Referenced: ${_docName}${_page ? `, Page ${_page}` : ''}` })
+  const handleCitationClick = (docName: string, page?: number) => {
+    // Find the document by name and jump to the page
+    const doc = documents.find((d) => d.filename === docName)
+    if (doc) {
+      setSelectedDocumentId(doc.id)
+      setJumpTarget({ documentId: doc.id, page: page || 1 })
+    } else {
+      toast({ title: 'Document not found', description: `${docName} is not in this project` })
+    }
+  }
+
+  const handlePinMessage = async (content: string) => {
+    if (!projectId) return
+    try {
+      const res = await fetch('/api/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          title: content.slice(0, 50) + '...',
+          content,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to pin message')
+      }
+      const note = await res.json()
+      addNote(note)
+      toast({ title: 'Pinned', description: 'Saved to Notes' })
+    } catch (err) {
+      toast({ title: 'Error', description: err instanceof Error ? err.message : 'Failed to pin', variant: 'destructive' })
+    }
   }
 
   const handleClear = async () => {
@@ -159,6 +204,15 @@ export function ChatPanel() {
           <h3 className="text-sm font-semibold">AI Chat</h3>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setSettingsOpen(true)}
+            title="AI Settings"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+          </Button>
           <Button
             variant={showDebug ? 'default' : 'ghost'}
             size="icon"
@@ -205,6 +259,7 @@ export function ChatPanel() {
               content={msg.content}
               citations={msg.citations}
               onCitationClick={handleCitationClick}
+              onPin={msg.role === 'assistant' ? handlePinMessage : undefined}
             />
           ))}
 
@@ -287,7 +342,7 @@ export function ChatPanel() {
                     </div>
                   </div>
                 ))}
-                {debugData.pdfTests && Object.keys(debugData.pdfTests as Record<string, unknown>).length > 0 && (
+                {Boolean(debugData.pdfTests) && Object.keys(debugData.pdfTests as Record<string, unknown>).length > 0 && (
                   <div className="mt-1.5">
                     <span className="text-muted-foreground font-semibold">PDF extraction test:</span>
                     <pre className="mt-1 text-[10px] bg-background p-1.5 rounded border overflow-x-auto max-h-24">
@@ -305,7 +360,6 @@ export function ChatPanel() {
       <div className="p-3 border-t shrink-0">
         <div className="flex gap-2 items-end">
           <Textarea
-            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -331,15 +385,8 @@ export function ChatPanel() {
           AI answers are based on your uploaded documents. Always verify critical values.
         </p>
       </div>
-    </div>
-  )
-}
 
-function Bot({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" />
-      <path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
-    </svg>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+    </div>
   )
 }

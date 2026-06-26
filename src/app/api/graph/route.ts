@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import ZAI from 'z-ai-web-dev-sdk';
+import { generateChat, parseAISettings, AIConfigError } from '@/lib/ai';
+import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
+import { collectProjectText } from '@/lib/document-text';
 
 const GRAPH_SYSTEM_PROMPT = `You are an entity extraction specialist for engineering documents.
 From the text provided, extract all key entities and their relationships.
@@ -13,38 +14,27 @@ No preamble. No explanation. Only valid JSON.`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { projectId } = await request.json();
+    const { projectId, settings: bodySettings } = await request.json();
 
     if (!projectId) {
       return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
     }
 
-    // Get all document text (sample from each document to avoid token limits)
-    const documents = await db.document.findMany({
-      where: { projectId },
-      select: { id: true, filename: true },
-    });
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(projectId, ownerId);
+    if (!project) return notOwnedResponse();
 
-    if (documents.length === 0) {
+    const settings = parseAISettings(bodySettings) ?? undefined;
+
+    // Collect text from all documents (handles PDFs via OCR fallback)
+    const { text: combinedText, docCount } = await collectProjectText(
+      projectId, 15000, settings, 15,
+    );
+
+    if (docCount === 0) {
       return NextResponse.json({ error: 'No documents found in this project' }, { status: 400 });
     }
-
-    // Collect representative chunks from each document
-    const allChunks: string[] = [];
-    for (const doc of documents) {
-      const chunks = await db.documentChunk.findMany({
-        where: { documentId: doc.id },
-        orderBy: { chunkIndex: 'asc' },
-        take: 15, // Sample up to 15 chunks per document
-        select: { text: true },
-      });
-      const docText = chunks.map((c) => c.text).join('\n\n');
-      if (docText) {
-        allChunks.push(`=== ${doc.filename} ===\n${docText}`);
-      }
-    }
-
-    const combinedText = allChunks.join('\n\n').slice(0, 15000); // Limit context
 
     if (!combinedText.trim()) {
       return NextResponse.json(
@@ -54,16 +44,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Call LLM to extract entities
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'assistant', content: GRAPH_SYSTEM_PROMPT },
-        { role: 'user', content: `Extract entities and relationships from:\n\n${combinedText}` },
-      ],
-      thinking: { type: 'disabled' },
-    });
+    const completionText = await generateChat([
+      { role: 'system', content: GRAPH_SYSTEM_PROMPT },
+      { role: 'user', content: `Extract entities and relationships from:\n\n${combinedText}` },
+    ], undefined, settings);
 
-    const rawResponse = completion.choices[0]?.message?.content || '{}';
+    const rawResponse = completionText || '{}';
 
     // Parse JSON from response (handle possible markdown wrapping)
     let graphData;
@@ -89,6 +75,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(safeData);
   } catch (error) {
     console.error('Graph generation error:', error);
+    if (error instanceof AIConfigError) {
+      return NextResponse.json({ error: error.message, needsSettings: true }, { status: 400 });
+    }
     return NextResponse.json(
       { error: 'Failed to generate knowledge graph', details: String(error) },
       { status: 500 }

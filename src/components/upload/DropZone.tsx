@@ -75,12 +75,12 @@ export function DropZone({ onFilesSelected, disabled, compact }: DropZoneProps) 
       <>
         <button
           type="button"
-          role="presentation"
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onClick={handleClick}
           disabled={disabled}
+          aria-label="Upload documents"
           className={cn(
             'w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed transition-colors cursor-pointer',
             isDragOver
@@ -112,7 +112,10 @@ export function DropZone({ onFilesSelected, disabled, compact }: DropZoneProps) 
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onClick={handleClick}
-      role="presentation"
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick() } }}
+      aria-label="Drag and drop or click to upload documents"
       className={cn(
         'flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 transition-colors cursor-pointer',
         isDragOver

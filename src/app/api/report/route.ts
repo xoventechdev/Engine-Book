@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import ZAI from 'z-ai-web-dev-sdk';
+import { generateChat, parseAISettings, AIConfigError } from '@/lib/ai';
+import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
+import { collectProjectText } from '@/lib/document-text';
 
 const REPORT_SYSTEM_PROMPT = `You are a technical documentation expert for engineering projects.
 Based on the document content provided, generate the requested output in structured format.
@@ -10,7 +12,7 @@ Output in clean Markdown format.`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { projectId, outputType, title } = await request.json();
+    const { projectId, outputType, title, settings: bodySettings } = await request.json();
 
     if (!projectId || !outputType) {
       return NextResponse.json(
@@ -19,32 +21,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get documents and their text
-    const documents = await db.document.findMany({
-      where: { projectId },
-      select: { id: true, filename: true },
-    });
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(projectId, ownerId);
+    if (!project) return notOwnedResponse();
 
-    if (documents.length === 0) {
+    const settings = parseAISettings(bodySettings) ?? undefined;
+
+    // Collect text from all documents (handles PDFs via OCR fallback)
+    const { text: combinedText, docCount } = await collectProjectText(
+      projectId, 12000, settings,
+    );
+
+    if (docCount === 0) {
       return NextResponse.json({ error: 'No documents in this project' }, { status: 400 });
     }
-
-    // Collect text from all documents
-    const docTexts: string[] = [];
-    for (const doc of documents) {
-      const chunks = await db.documentChunk.findMany({
-        where: { documentId: doc.id },
-        orderBy: { chunkIndex: 'asc' },
-        select: { text: true },
-      });
-      if (chunks.length > 0) {
-        docTexts.push(
-          `=== ${doc.filename} ===\n${chunks.map((c) => c.text).join('\n\n')}`
-        );
-      }
-    }
-
-    const combinedText = docTexts.join('\n\n').slice(0, 12000);
 
     if (!combinedText.trim()) {
       return NextResponse.json(
@@ -92,19 +83,15 @@ Format as organized Markdown tables. Cite sources.`,
     const instruction = typeInstructions[outputType] || typeInstructions.data_extraction;
 
     // Call LLM
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'assistant', content: REPORT_SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `${instruction}\n\nDocument content:\n${combinedText}`,
-        },
-      ],
-      thinking: { type: 'disabled' },
-    });
+    const completionText = await generateChat([
+      { role: 'system', content: REPORT_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `${instruction}\n\nDocument content:\n${combinedText}`,
+      },
+    ], undefined, settings);
 
-    const reportContent = completion.choices[0]?.message?.content || 'Failed to generate report.';
+    const reportContent = completionText || 'Failed to generate report.';
 
     // Save to database
     const output = await db.generatedOutput.create({
@@ -125,6 +112,9 @@ Format as organized Markdown tables. Cite sources.`,
     });
   } catch (error) {
     console.error('Report generation error:', error);
+    if (error instanceof AIConfigError) {
+      return NextResponse.json({ error: error.message, needsSettings: true }, { status: 400 });
+    }
     return NextResponse.json(
       { error: 'Failed to generate report', details: String(error) },
       { status: 500 }

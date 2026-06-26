@@ -6,8 +6,6 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  // canvas has native C++ bindings — let Node load it at runtime
-  serverExternalPackages: ["canvas"],
 };
 
 export default nextConfig;

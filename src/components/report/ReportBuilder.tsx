@@ -14,15 +14,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/hooks/use-toast'
 import { ArrowLeft, FileBarChart2, Loader2, Sparkles, Download, Copy, Check } from 'lucide-react'
 import { REPORT_TYPES } from '@/lib/helpers'
+import { loadAISettings } from '@/lib/client-settings'
 import ReactMarkdown from 'react-markdown'
 
 export function ReportBuilder() {
   const { currentProject, setViewMode } = useAppStore()
-  const [outputType, setOutputType] = useState(REPORT_TYPES[0].value)
+  const [outputType, setOutputType] = useState<string>(REPORT_TYPES[0].value)
   const [title, setTitle] = useState('')
   const [loading, setLoading] = useState(false)
   const [report, setReport] = useState<{ id: string; outputType: string; title: string; content: string } | null>(null)
@@ -37,6 +37,7 @@ export function ReportBuilder() {
     setIsEditing(false)
 
     try {
+      const aiSettings = loadAISettings()
       const res = await fetch('/api/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -44,11 +45,15 @@ export function ReportBuilder() {
           projectId: currentProject.id,
           outputType,
           title: title.trim() || undefined,
+          ...(aiSettings ? { settings: aiSettings } : {}),
         }),
       })
 
       if (!res.ok) {
         const err = await res.json()
+        if (err.needsSettings) {
+          toast({ title: 'AI Settings needed', description: 'Add your API key in Settings first.', variant: 'destructive' })
+        }
         throw new Error(err.error || 'Failed to generate report')
       }
 

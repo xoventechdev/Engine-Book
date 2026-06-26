@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getOwnerId, getOwnedProject, claimLegacyProjects, unauthenticatedResponse } from '@/lib/owner';
 import path from 'path';
 import fs from 'fs';
 
@@ -9,18 +10,26 @@ import fs from 'fs';
  *        GET /api/debug                  (all projects overview)
  */
 export async function GET(request: NextRequest) {
+  // Only available in development — prevents leaking internal diagnostics in production
+  if (process.env.NODE_ENV !== 'development') {
+    return NextResponse.json({ error: 'Not available' }, { status: 403 });
+  }
+
   try {
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
     const projectId = request.nextUrl.searchParams.get('projectId');
 
     const debug: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
       nodeVersion: process.version,
     };
 
     if (!projectId) {
-      // Show all projects overview
+      // Show all projects overview (scoped to this owner)
+      await claimLegacyProjects(ownerId);
       const projects = await db.project.findMany({
+        where: ownerId ? { ownerId } : {},
         include: {
           _count: { select: { documents: true, chatMessages: true } },
           documents: {
@@ -51,6 +60,11 @@ export async function GET(request: NextRequest) {
     }
 
     // Project-specific debug
+    const owned = await getOwnedProject(projectId, ownerId);
+    if (!owned) {
+      return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+    }
+
     const project = await db.project.findUnique({
       where: { id: projectId },
       include: {
@@ -60,7 +74,6 @@ export async function GET(request: NextRequest) {
         },
       },
     });
-
     if (!project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 });
     }

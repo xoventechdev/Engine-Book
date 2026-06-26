@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getOwnerId, claimLegacyProjects, unauthenticatedResponse } from '@/lib/owner';
 
 export async function GET() {
   try {
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+
+    // Claim legacy (null-owner) projects for this browser on first load.
+    await claimLegacyProjects(ownerId);
+
     const projects = await db.project.findMany({
+      where: ownerId ? { ownerId } : {},
       orderBy: { updatedAt: 'desc' },
       include: {
         _count: { select: { documents: true } },
@@ -26,11 +34,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Project name is required' }, { status: 400 });
     }
 
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+
     const project = await db.project.create({
       data: {
         name: name.trim(),
         description: description?.trim() || null,
         discipline: discipline || 'General',
+        ownerId: ownerId || null,
       },
       include: {
         _count: { select: { documents: true } },

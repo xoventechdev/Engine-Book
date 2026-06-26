@@ -6,9 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { CreateProjectDialog } from '@/components/dashboard/CreateProjectDialog'
+import { EditProjectDialog } from '@/components/dashboard/EditProjectDialog'
 import { formatRelativeTime, getDisciplineColor } from '@/lib/helpers'
-import { Plus, FolderOpen, Trash2, FileText, MoreVertical } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, FileText, MoreVertical, Settings2, Pencil } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { UserMenu } from '@/components/auth/UserMenu'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +28,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { SettingsDialog } from '@/components/settings/SettingsDialog'
 
 export function Dashboard() {
   const { setViewMode, setCurrentProject, setDocuments, setChatMessages, setChatOpen, setSelectedDocumentId } = useAppStore()
@@ -33,14 +36,25 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [editTarget, setEditTarget] = useState<Project | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const { toast } = useToast()
 
   const loadProjects = async () => {
     try {
       const res = await fetch('/api/projects')
       const data = await res.json()
-      setProjects(data)
+      if (!res.ok) {
+        if (data.needsAuth) {
+          // Session expired — AuthGate will handle redirect to login
+          setProjects([])
+          return
+        }
+        throw new Error(data.error || 'Failed to load projects')
+      }
+      setProjects(Array.isArray(data) ? data : [])
     } catch {
+      setProjects([])
       toast({ title: 'Error', description: 'Failed to load projects', variant: 'destructive' })
     } finally {
       setLoading(false)
@@ -60,11 +74,15 @@ export function Dashboard() {
 
   const handleDeleteProject = async (id: string) => {
     try {
-      await fetch(`/api/projects/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to delete project')
+      }
       setProjects((prev) => prev.filter((p) => p.id !== id))
       toast({ title: 'Deleted', description: 'Project deleted successfully' })
-    } catch {
-      toast({ title: 'Error', description: 'Failed to delete project', variant: 'destructive' })
+    } catch (err) {
+      toast({ title: 'Error', description: err instanceof Error ? err.message : 'Failed to delete project', variant: 'destructive' })
     }
     setDeleteTarget(null)
   }
@@ -88,12 +106,20 @@ export function Dashboard() {
               <p className="text-xs text-muted-foreground">AI Engineering Document Assistant</p>
             </div>
           </div>
-          <Button onClick={() => setCreateOpen(true)} className="gap-2">
-            <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">New Project</span>
-          </Button>
+          <div className="flex items-center gap-2">
+            <UserMenu />
+            <Button variant="outline" size="icon" onClick={() => setSettingsOpen(true)} title="AI Settings" aria-label="AI Settings">
+              <Settings2 className="h-4 w-4" />
+            </Button>
+            <Button onClick={() => setCreateOpen(true)} className="gap-2">
+              <Plus className="h-4 w-4" />
+              <span className="hidden sm:inline">New Project</span>
+            </Button>
+          </div>
         </div>
       </header>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 
       {/* Content */}
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
@@ -158,6 +184,12 @@ export function Dashboard() {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem
+                                onClick={(e) => { e.stopPropagation(); setEditTarget(project) }}
+                              >
+                                <Pencil className="h-4 w-4 mr-2" />
+                                Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
                                 onClick={(e) => { e.stopPropagation(); setDeleteTarget(project.id) }}
                                 className="text-destructive"
                               >
@@ -197,6 +229,8 @@ export function Dashboard() {
       </footer>
 
       <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={handleCreated} />
+
+      <EditProjectDialog project={editTarget} open={!!editTarget} onOpenChange={(o) => { if (!o) setEditTarget(null) }} onUpdated={loadProjects} />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>

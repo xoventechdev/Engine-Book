@@ -6,6 +6,14 @@ export type Discipline = 'BMS' | 'HVAC' | 'Electrical' | 'Fire Alarm' | 'Structu
 
 export type ViewMode = 'dashboard' | 'workspace' | 'graph' | 'compare' | 'report';
 
+export interface Note {
+  id: string;
+  projectId: string;
+  title: string;
+  content: string;
+  createdAt: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -79,6 +87,16 @@ interface AppState {
   selectedDocumentId: string | null;
   setSelectedDocumentId: (id: string | null) => void;
 
+  // Citation jump target — when set, DocumentViewer opens the doc at this page
+  jumpTarget: { documentId: string; page: number } | null;
+  setJumpTarget: (target: { documentId: string; page: number } | null) => void;
+
+  // Notes (pinned answers)
+  notes: Note[];
+  setNotes: (notes: Note[]) => void;
+  addNote: (note: Note) => void;
+  removeNote: (id: string) => void;
+
   // Chat
   chatMessages: ChatMessage[];
   setChatMessages: (messages: ChatMessage[]) => void;
@@ -94,10 +112,6 @@ interface AppState {
   // Graph
   graphData: GraphData | null;
   setGraphData: (data: GraphData | null) => void;
-
-  // Compare
-  compareDocumentIds: [string | null, string | null];
-  setCompareDocumentIds: (ids: [string | null, string | null]) => void;
 
   // UI State
   sidebarOpen: boolean;
@@ -125,6 +139,16 @@ export const useAppStore = create<AppState>((set) => ({
   selectedDocumentId: null,
   setSelectedDocumentId: (id) => set({ selectedDocumentId: id }),
 
+  // Citation jump target
+  jumpTarget: null,
+  setJumpTarget: (target) => set({ jumpTarget: target }),
+
+  // Notes
+  notes: [],
+  setNotes: (notes) => set({ notes }),
+  addNote: (note) => set((state) => ({ notes: [note, ...state.notes] })),
+  removeNote: (id) => set((state) => ({ notes: state.notes.filter(n => n.id !== id) })),
+
   // Chat
   chatMessages: [],
   setChatMessages: (messages) => set({ chatMessages: messages }),
@@ -140,10 +164,6 @@ export const useAppStore = create<AppState>((set) => ({
   // Graph
   graphData: null,
   setGraphData: (data) => set({ graphData: data }),
-
-  // Compare
-  compareDocumentIds: [null, null],
-  setCompareDocumentIds: (ids) => set({ compareDocumentIds: ids }),
 
   // UI State
   sidebarOpen: true,

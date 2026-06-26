@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
 
 export async function GET(
   request: NextRequest,
@@ -7,18 +8,21 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const project = await db.project.findUnique({
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(id, ownerId);
+    if (!project) {
+      return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+    }
+
+    const fullProject = await db.project.findUnique({
       where: { id },
       include: {
         _count: { select: { documents: true } },
       },
     });
 
-    if (!project) {
-      return NextResponse.json({ error: 'Project not found' }, { status: 404 });
-    }
-
-    return NextResponse.json(project);
+    return NextResponse.json(fullProject);
   } catch (error) {
     console.error('Failed to fetch project:', error);
     return NextResponse.json({ error: 'Failed to fetch project' }, { status: 500 });
@@ -31,6 +35,10 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(id, ownerId);
+    if (!project) return notOwnedResponse();
 
     // Delete associated documents from filesystem
     const documents = await db.document.findMany({
@@ -66,10 +74,15 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
+    const ownerId = await getOwnerId();
+    if (!ownerId) return unauthenticatedResponse();
+    const project = await getOwnedProject(id, ownerId);
+    if (!project) return notOwnedResponse();
+
     const body = await request.json();
     const { name, description, discipline } = body;
 
-    const project = await db.project.update({
+    const updated = await db.project.update({
       where: { id },
       data: {
         ...(name && { name: name.trim() }),
@@ -81,7 +94,7 @@ export async function PATCH(
       },
     });
 
-    return NextResponse.json(project);
+    return NextResponse.json(updated);
   } catch (error) {
     console.error('Failed to update project:', error);
     return NextResponse.json({ error: 'Failed to update project' }, { status: 500 });

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -12,9 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
+import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, GitCompare, Loader2, Plus, Minus, FileText } from 'lucide-react'
+import { ArrowLeft, GitCompare, Loader2, FileText } from 'lucide-react'
+import { loadAISettings } from '@/lib/client-settings'
 
 interface CompareResult {
   documentA: { id: string; filename: string }
@@ -27,7 +28,7 @@ interface CompareResult {
 }
 
 export function CompareView() {
-  const { currentProject, documents, setViewMode } = useAppStore()
+  const { documents, setViewMode } = useAppStore()
   const [docAId, setDocAId] = useState<string>('')
   const [docBId, setDocBId] = useState<string>('')
   const [loading, setLoading] = useState(false)
@@ -46,14 +47,22 @@ export function CompareView() {
 
     setLoading(true)
     try {
+      const aiSettings = loadAISettings()
       const res = await fetch('/api/compare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentAId: docAId, documentBId: docBId }),
+        body: JSON.stringify({
+          documentAId: docAId,
+          documentBId: docBId,
+          ...(aiSettings ? { settings: aiSettings } : {}),
+        }),
       })
 
       if (!res.ok) {
         const err = await res.json()
+        if (err.needsSettings) {
+          toast({ title: 'AI Settings needed', description: 'Add your API key in Settings first.', variant: 'destructive' })
+        }
         throw new Error(err.error || 'Failed to compare')
       }
 
@@ -89,7 +98,7 @@ export function CompareView() {
       <div className="px-4 py-3 border-b bg-card shrink-0">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[180px]">
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Document A</label>
+            <Label className="text-xs font-medium text-muted-foreground mb-1 block">Document A</Label>
             <Select value={docAId} onValueChange={setDocAId}>
               <SelectTrigger className="h-9">
                 <SelectValue placeholder="Select first document" />
@@ -102,7 +111,7 @@ export function CompareView() {
             </Select>
           </div>
           <div className="flex-1 min-w-[180px]">
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Document B</label>
+            <Label className="text-xs font-medium text-muted-foreground mb-1 block">Document B</Label>
             <Select value={docBId} onValueChange={setDocBId}>
               <SelectTrigger className="h-9">
                 <SelectValue placeholder="Select second document" />
