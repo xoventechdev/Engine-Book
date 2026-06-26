@@ -190,9 +190,31 @@ export function KnowledgeGraphView() {
         </Button>
       </header>
 
-      <div className="flex-1 flex min-h-0">
-        {/* Sidebar */}
-        <div className="w-56 border-r bg-card p-3 flex flex-col shrink-0">
+      <div className="flex-1 flex min-h-0 flex-col md:flex-row">
+        {/* Mobile: horizontal filter bar */}
+        <div className="md:hidden border-b bg-card p-2 shrink-0">
+          <div className="flex items-center gap-1.5 overflow-x-auto">
+            {NODE_TYPE_FILTERS.map((type) => (
+              <button
+                key={type}
+                onClick={() => setNodeFilter(type)}
+                className={`shrink-0 text-xs px-2.5 py-1 rounded-full transition-colors flex items-center gap-1.5 ${
+                  nodeFilter === type
+                    ? 'bg-accent text-accent-foreground font-medium'
+                    : 'text-muted-foreground hover:bg-muted border'
+                }`}
+              >
+                {type !== 'All' && (
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: NODE_COLORS[type] }} />
+                )}
+                {type}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Desktop: sidebar */}
+        <div className="hidden md:flex w-56 border-r bg-card p-3 flex-col shrink-0">
           <div className="flex items-center gap-1.5 mb-3">
             <Filter className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="text-xs font-medium text-muted-foreground">Filter by Type</span>

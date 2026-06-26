@@ -156,3 +156,8 @@
 .prose th {
   @apply bg-muted font-semibold;
 }
+
+/* Mobile safe area (notch / home indicator) */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

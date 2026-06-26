@@ -95,9 +95,9 @@ export function CompareView() {
       </header>
 
       {/* Controls */}
-      <div className="px-4 py-3 border-b bg-card shrink-0">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex-1 min-w-[180px]">
+      <div className="px-3 sm:px-4 py-3 border-b bg-card shrink-0">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-end gap-3">
+          <div className="flex-1 min-w-0 sm:min-w-[180px]">
             <Label className="text-xs font-medium text-muted-foreground mb-1 block">Document A</Label>
             <Select value={docAId} onValueChange={setDocAId}>
               <SelectTrigger className="h-9">
@@ -110,7 +110,7 @@ export function CompareView() {
               </SelectContent>
             </Select>
           </div>
-          <div className="flex-1 min-w-[180px]">
+          <div className="flex-1 min-w-0 sm:min-w-[180px]">
             <Label className="text-xs font-medium text-muted-foreground mb-1 block">Document B</Label>
             <Select value={docBId} onValueChange={setDocBId}>
               <SelectTrigger className="h-9">
