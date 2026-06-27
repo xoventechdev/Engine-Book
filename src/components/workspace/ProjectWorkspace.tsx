@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels'
 import { WorkspaceToolbar } from './WorkspaceToolbar'
@@ -73,10 +73,12 @@ function MobileWorkspace({ tab, setTab }: { tab: MobileTab; setTab: (t: MobileTa
 
   // Auto-switch to viewer tab when a document is selected
   const [lastSelected, setLastSelected] = useState<string | null>(null)
-  if (selectedDocumentId && selectedDocumentId !== lastSelected) {
-    setLastSelected(selectedDocumentId)
-    if (tab === 'documents') setTab('viewer')
-  }
+  useEffect(() => {
+    if (selectedDocumentId && selectedDocumentId !== lastSelected) {
+      setLastSelected(selectedDocumentId)
+      if (tab === 'documents') setTab('viewer')
+    }
+  }, [selectedDocumentId, lastSelected, tab, setTab])
 
   const chatBadge = chatMessages.length
 
@@ -90,11 +92,18 @@ function MobileWorkspace({ tab, setTab }: { tab: MobileTab; setTab: (t: MobileTa
     <div className="h-screen flex flex-col">
       <WorkspaceToolbar />
 
-      {/* Single active panel */}
+      {/* Single active panel — all panels stay mounted, only the active one is visible.
+          This preserves state (loaded documents, insights, chat, PDF blob) across tab switches. */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {tab === 'documents' && <DocumentSidebar />}
-        {tab === 'viewer' && <DocumentViewer />}
-        {tab === 'chat' && <ChatPanel />}
+        <div className={cn('h-full', tab === 'documents' ? 'block' : 'hidden')}>
+          <DocumentSidebar />
+        </div>
+        <div className={cn('h-full', tab === 'viewer' ? 'block' : 'hidden')}>
+          <DocumentViewer />
+        </div>
+        <div className={cn('h-full', tab === 'chat' ? 'block' : 'hidden')}>
+          <ChatPanel />
+        </div>
       </div>
 
       {/* Bottom tab bar */}

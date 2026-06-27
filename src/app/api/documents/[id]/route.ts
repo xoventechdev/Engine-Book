@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
-import path from 'path';
-import fs from 'fs';
+import { deleteDocumentFile } from '@/lib/storage';
 
 export async function GET(
   request: NextRequest,
@@ -45,14 +44,13 @@ export async function DELETE(
     const project = await getOwnedProject(document.projectId, ownerId);
     if (!project) return notOwnedResponse();
 
-    // Delete file from disk
+    // Delete file from Supabase Storage
     try {
-      const fullPath = path.join(process.cwd(), document.filePath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
+      if (document.filePath) {
+        await deleteDocumentFile(document.filePath);
       }
     } catch {
-      // Ignore file deletion errors
+      // Ignore file deletion errors — DB cleanup still proceeds
     }
 
     // Delete from database (cascades to chunks)

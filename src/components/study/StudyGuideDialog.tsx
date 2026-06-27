@@ -106,7 +106,7 @@ export function StudyGuideDialog({ open, onOpenChange, projectId, projectName }:
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <GraduationCap className="h-4 w-4 text-emerald-500" />
@@ -155,7 +155,7 @@ export function StudyGuideDialog({ open, onOpenChange, projectId, projectName }:
 
         {/* Study guide content */}
         {!loading && !error && guide && (
-          <ScrollArea className="flex-1 -mx-6 px-6">
+          <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
             <div className="space-y-6 pb-4">
               {/* Summary */}
               <section className="space-y-2">

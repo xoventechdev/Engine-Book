@@ -18,11 +18,12 @@ export function ChatPanel() {
     addChatMessage,
     isChatLoading,
     setChatLoading,
-    disciplineFilter,
     documents,
     setSelectedDocumentId,
     setJumpTarget,
     addNote,
+    pendingChatInput,
+    setPendingChatInput,
   } = useAppStore()
 
   const [input, setInput] = useState('')
@@ -58,6 +59,14 @@ export function ChatPanel() {
     }
   }, [chatMessages, isChatLoading])
 
+  // Pick up pending chat input from InsightsPanel (suggested questions)
+  useEffect(() => {
+    if (pendingChatInput && !isChatLoading) {
+      setInput(pendingChatInput)
+      setPendingChatInput(null)
+    }
+  }, [pendingChatInput, isChatLoading, setPendingChatInput])
+
   const handleSend = useCallback(async () => {
     if (!input.trim() || !projectId || isChatLoading) return
 
@@ -85,7 +94,6 @@ export function ChatPanel() {
         body: JSON.stringify({
           projectId,
           message,
-          disciplineFilter: disciplineFilter === 'All' ? null : disciplineFilter,
           ...(aiSettings ? { settings: aiSettings } : {}),
         }),
       })
@@ -109,6 +117,8 @@ export function ChatPanel() {
         role: 'assistant',
         content: data.content,
         citations: data.citations || null,
+        toolCalls: data.toolCalls || null,
+        phases: data.phases || null,
         createdAt: data.createdAt,
       })
       // Store debug info if available
@@ -127,7 +137,7 @@ export function ChatPanel() {
     } finally {
       setChatLoading(false)
     }
-  }, [input, projectId, isChatLoading, disciplineFilter, addChatMessage, setChatLoading, toast])
+  }, [input, projectId, isChatLoading, addChatMessage, setChatLoading, toast])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -199,10 +209,13 @@ export function ChatPanel() {
     <div className="flex flex-col h-full bg-card border-l">
       {/* Header */}
       <div className="px-3 py-2.5 border-b flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-emerald-500" />
-          <h3 className="text-sm font-semibold">AI Chat</h3>
-        </div>
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-500" />
+            <h3 className="text-sm font-semibold">AI Agent</h3>
+            <span className="text-[9px] text-muted-foreground bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 px-1.5 py-0.5 rounded-full font-medium">
+              Agentic
+            </span>
+          </div>
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
@@ -258,6 +271,8 @@ export function ChatPanel() {
               role={msg.role}
               content={msg.content}
               citations={msg.citations}
+              toolCalls={msg.toolCalls}
+              phases={msg.phases}
               onCitationClick={handleCitationClick}
               onPin={msg.role === 'assistant' ? handlePinMessage : undefined}
             />
@@ -269,10 +284,13 @@ export function ChatPanel() {
                 <Bot className="h-4 w-4 text-muted-foreground" />
               </div>
               <div className="bg-muted rounded-xl rounded-bl-sm px-4 py-3">
-                <div className="flex gap-1.5">
-                  <span className="w-2 h-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <span className="w-2 h-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <span className="w-2 h-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-1.5">
+                    <span className="w-2 h-2 bg-violet-500/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="w-2 h-2 bg-violet-500/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="w-2 h-2 bg-violet-500/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">Agent team researching &amp; fact-checking...</span>
                 </div>
               </div>
             </div>

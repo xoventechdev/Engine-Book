@@ -176,28 +176,52 @@ export function Dashboard() {
                       <CardHeader className="pb-2 pt-4 px-4 flex-1 min-h-0">
                         <div className="flex items-start justify-between gap-2">
                           <CardTitle className="text-base font-semibold truncate">{project.name}</CardTitle>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <MoreVertical className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={(e) => { e.stopPropagation(); setEditTarget(project) }}
-                              >
-                                <Pencil className="h-4 w-4 mr-2" />
-                                Edit
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={(e) => { e.stopPropagation(); setDeleteTarget(project.id) }}
-                                className="text-destructive"
-                              >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {/* Mobile-only visible action buttons */}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 sm:hidden"
+                              onClick={(e) => { e.stopPropagation(); setEditTarget(project) }}
+                              aria-label="Edit project"
+                              title="Edit"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 sm:hidden text-destructive hover:text-destructive"
+                              onClick={(e) => { e.stopPropagation(); setDeleteTarget(project.id) }}
+                              aria-label="Delete project"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                            {/* Desktop dropdown */}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 hidden sm:inline-flex opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <MoreVertical className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={(e) => { e.stopPropagation(); setEditTarget(project) }}
+                                >
+                                  <Pencil className="h-4 w-4 mr-2" />
+                                  Edit
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={(e) => { e.stopPropagation(); setDeleteTarget(project.id) }}
+                                  className="text-destructive"
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         </div>
                         {project.description && (
                           <p className="text-sm text-muted-foreground line-clamp-2 mt-1">{project.description}</p>

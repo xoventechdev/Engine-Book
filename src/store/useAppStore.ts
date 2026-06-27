@@ -34,12 +34,28 @@ export interface Document {
   uploadedAt: string;
 }
 
+export interface ToolCallLogEntry {
+  step: number;
+  tool: string;
+  args: Record<string, unknown>;
+  resultSummary: string;
+}
+
+export interface AgentPhaseLog {
+  role: 'researcher' | 'fact-checker' | 'synthesizer';
+  label: string;
+  toolCalls: ToolCallLogEntry[];
+  output: string;
+}
+
 export interface ChatMessage {
   id: string;
   projectId: string;
   role: 'user' | 'assistant';
   content: string;
   citations: Citation[] | null;
+  toolCalls?: ToolCallLogEntry[] | null;
+  phases?: AgentPhaseLog[] | null;
   createdAt: string;
 }
 
@@ -52,13 +68,16 @@ export interface Citation {
 export interface GraphNode {
   id: string;
   label: string;
-  type: 'Equipment' | 'Spec' | 'Standard' | 'Location' | 'Value';
+  type: 'Equipment' | 'Spec' | 'Standard' | 'Location' | 'Value' | 'System' | 'Component' | 'Parameter';
+  properties?: Record<string, string>;
+  document?: string;
 }
 
 export interface GraphEdge {
   source: string;
   target: string;
   relation: string;
+  weight?: number;
 }
 
 export interface GraphData {
@@ -105,9 +124,9 @@ interface AppState {
   isChatLoading: boolean;
   setChatLoading: (loading: boolean) => void;
 
-  // Discipline filter
-  disciplineFilter: Discipline | 'All';
-  setDisciplineFilter: (filter: Discipline | 'All') => void;
+  // Pending chat input — set by InsightsPanel (suggested questions), consumed by ChatPanel
+  pendingChatInput: string | null;
+  setPendingChatInput: (input: string | null) => void;
 
   // Graph
   graphData: GraphData | null;
@@ -157,9 +176,9 @@ export const useAppStore = create<AppState>((set) => ({
   isChatLoading: false,
   setChatLoading: (loading) => set({ isChatLoading: loading }),
 
-  // Discipline filter
-  disciplineFilter: 'All',
-  setDisciplineFilter: (filter) => set({ disciplineFilter: filter }),
+  // Pending chat input
+  pendingChatInput: null,
+  setPendingChatInput: (input) => set({ pendingChatInput: input }),
 
   // Graph
   graphData: null,

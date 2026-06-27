@@ -478,3 +478,397 @@ export async function generateVisionOCR(
   ];
   return generateChat(messages, undefined, s);
 }
+
+// ===========================================================================
+// 4) TOOL-CALLING SUPPORT (Agentic AI workflow)
+// ===========================================================================
+//
+// Enables the agentic research loop: the LLM can request tool calls
+// (list_documents, search_documents, read_document) which are executed
+// server-side, and the results are fed back for the next reasoning step.
+//
+// Each provider has a different wire format for tool calling:
+//   Gemini:    tools: [{ functionDeclarations: [...] }]
+//              response parts: { functionCall: { name, args } }
+//              tool result:    { functionResponse: { name, response } } (user turn)
+//   OpenAI:    tools: [{ type: "function", function: {...} }]
+//              response: message.tool_calls = [{ id, function: { name, arguments } }]
+//              tool result: { role: "tool", tool_call_id, content }
+//   Anthropic: tools: [{ name, description, input_schema }]
+//              response content: { type: "tool_use", id, name, input }
+//              tool result: { role: "user", content: [{ type: "tool_result" }] }
+
+import type {
+  ToolDefinition,
+  ToolCall,
+  AgentMessage,
+  AgentStepResult,
+} from '@/lib/agent/types';
+
+/** Map JSON-Schema types (lowercase) to Gemini's uppercase type enum. */
+function toGeminiType(type: string): string {
+  const map: Record<string, string> = {
+    string: 'STRING',
+    number: 'NUMBER',
+    integer: 'INTEGER',
+    boolean: 'BOOLEAN',
+    object: 'OBJECT',
+    array: 'ARRAY',
+  };
+  return map[type] || 'STRING';
+}
+
+// ---------------------------------------------------------------------------
+// Gemini with tools
+// ---------------------------------------------------------------------------
+
+async function callGeminiWithTools(
+  messages: AgentMessage[],
+  tools: ToolDefinition[],
+  opts: ChatOptions | undefined,
+  s: AISettings,
+): Promise<AgentStepResult> {
+  assertKey(s);
+
+  const systemMsgs = messages.filter((m) => m.role === 'system');
+  const turnMsgs = messages.filter((m) => m.role !== 'system');
+
+  // Convert messages → Gemini contents, merging consecutive tool-result
+  // messages into a single user turn (Gemini requires this).
+  const contents: Array<Record<string, unknown>> = [];
+  for (const m of turnMsgs) {
+    if (m.role === 'tool') {
+      const part = { functionResponse: { name: m.toolName, response: { result: m.content } } };
+      const last = contents[contents.length - 1];
+      if (last && last.role === 'user' &&
+          Array.isArray(last.parts) &&
+          (last.parts as Array<Record<string, unknown>>).some((p) => p.functionResponse)) {
+        (last.parts as Array<Record<string, unknown>>).push(part);
+      } else {
+        contents.push({ role: 'user', parts: [part] });
+      }
+    } else if (m.role === 'assistant') {
+      const parts: Array<Record<string, unknown>> = [];
+      if (m.content) parts.push({ text: m.content });
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) {
+          parts.push({ functionCall: { name: tc.name, args: tc.args } });
+        }
+      }
+      if (parts.length === 0) parts.push({ text: '' });
+      contents.push({ role: 'model', parts });
+    } else {
+      contents.push({ role: 'user', parts: [{ text: m.content }] });
+    }
+  }
+
+  // Convert tool definitions → Gemini functionDeclarations
+  const functionDeclarations = tools.map((t) => {
+    const properties: Record<string, Record<string, unknown>> = {};
+    for (const [key, val] of Object.entries(t.parameters.properties)) {
+      properties[key] = {
+        type: toGeminiType(val.type),
+        description: val.description,
+        ...(val.enum ? { enum: val.enum } : {}),
+      };
+    }
+    return {
+      name: t.name,
+      description: t.description,
+      parameters: { type: 'OBJECT', properties, required: t.parameters.required },
+    };
+  });
+
+  const body: Record<string, unknown> = {
+    contents,
+    tools: [{ functionDeclarations }],
+    generationConfig: {
+      ...(opts?.temperature !== undefined ? { temperature: opts.temperature } : {}),
+      ...(opts?.maxTokens !== undefined ? { maxOutputTokens: opts.maxTokens } : {}),
+    },
+  };
+  if (systemMsgs.length > 0) {
+    body.systemInstruction = {
+      parts: systemMsgs.map((m) => ({ text: m.content })),
+    };
+  }
+
+  const url = `${GEMINI_BASE}/models/${encodeURIComponent(s.model)}:generateContent`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': s.apiKey },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new AICallError(`Gemini API error ${res.status}`, res.status, errText);
+  }
+
+  const json = await res.json();
+  const parts: Array<Record<string, unknown>> = json?.candidates?.[0]?.content?.parts || [];
+  const finishReason: string = json?.candidates?.[0]?.finishReason || 'STOP';
+
+  let text = '';
+  const toolCalls: ToolCall[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part.text) {
+      text += part.text as string;
+    } else if (part.functionCall) {
+      const fc = part.functionCall as { name: string; args: Record<string, unknown> };
+      toolCalls.push({
+        id: `call_${Date.now()}_${i}`,
+        name: fc.name,
+        args: fc.args || {},
+      });
+    }
+  }
+
+  return {
+    text,
+    toolCalls,
+    finishReason:
+      toolCalls.length > 0
+        ? 'tool_use'
+        : finishReason === 'MAX_TOKENS'
+          ? 'max_tokens'
+          : 'stop',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible with tools
+// ---------------------------------------------------------------------------
+
+async function callOpenAIWithTools(
+  messages: AgentMessage[],
+  tools: ToolDefinition[],
+  opts: ChatOptions | undefined,
+  s: AISettings,
+): Promise<AgentStepResult> {
+  assertKey(s);
+
+  const base = (s.baseUrl || PROVIDER_DEFAULTS.openai.baseUrl || '').replace(/\/+$/, '');
+  if (!base) throw new AIConfigError('OpenAI-compatible provider requires a baseUrl in Settings.');
+
+  // Convert messages → OpenAI messages
+  const oaiMessages: Array<Record<string, unknown>> = messages.map((m) => {
+    if (m.role === 'tool') {
+      return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
+    }
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      return {
+        role: 'assistant',
+        content: m.content || null,
+        tool_calls: m.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+        })),
+      };
+    }
+    return { role: m.role, content: m.content };
+  });
+
+  // Convert tools → OpenAI tools
+  const oaiTools = tools.map((t) => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
+
+  const body: Record<string, unknown> = {
+    model: s.model,
+    messages: oaiMessages,
+    tools: oaiTools,
+    ...(opts?.temperature !== undefined ? { temperature: opts.temperature } : {}),
+    ...(opts?.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
+  };
+
+  const res = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${s.apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new AICallError(`OpenAI-compatible API error ${res.status}`, res.status, errText);
+  }
+
+  const json = await res.json();
+  const message = json?.choices?.[0]?.message;
+  const finishReason: string = json?.choices?.[0]?.finish_reason || 'stop';
+
+  const text: string = message?.content || '';
+  const toolCalls: ToolCall[] = [];
+  if (Array.isArray(message?.tool_calls)) {
+    for (const tc of message.tool_calls) {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(tc.function?.arguments || '{}');
+      } catch {
+        args = {};
+      }
+      toolCalls.push({
+        id: tc.id || `call_${Date.now()}`,
+        name: tc.function?.name || '',
+        args,
+      });
+    }
+  }
+
+  return {
+    text,
+    toolCalls,
+    finishReason:
+      finishReason === 'tool_calls'
+        ? 'tool_use'
+        : finishReason === 'length'
+          ? 'max_tokens'
+          : 'stop',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic with tools
+// ---------------------------------------------------------------------------
+
+async function callAnthropicWithTools(
+  messages: AgentMessage[],
+  tools: ToolDefinition[],
+  opts: ChatOptions | undefined,
+  s: AISettings,
+): Promise<AgentStepResult> {
+  assertKey(s);
+
+  const systemMsgs = messages.filter((m) => m.role === 'system');
+  const turnMsgs = messages.filter((m) => m.role !== 'system');
+
+  // Convert tools → Anthropic tools (input_schema instead of parameters)
+  const anthropicTools = tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.parameters,
+  }));
+
+  // Convert messages → Anthropic format.
+  // Tool results become user turns with tool_result content blocks.
+  // Consecutive tool results merge into one user turn (Anthropic requires this).
+  const collapsed: Array<{ role: 'user' | 'assistant'; content: Array<Record<string, unknown>> }> = [];
+
+  for (const m of turnMsgs) {
+    if (m.role === 'tool') {
+      const block = {
+        type: 'tool_result',
+        tool_use_id: m.toolCallId,
+        content: m.content,
+      };
+      const last = collapsed[collapsed.length - 1];
+      if (last && last.role === 'user') {
+        last.content.push(block);
+      } else {
+        collapsed.push({ role: 'user', content: [block] });
+      }
+    } else if (m.role === 'assistant') {
+      const parts: Array<Record<string, unknown>> = [];
+      if (m.content) parts.push({ type: 'text', text: m.content });
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) {
+          parts.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args });
+        }
+      }
+      if (parts.length === 0) parts.push({ type: 'text', text: '' });
+      collapsed.push({ role: 'assistant', content: parts });
+    } else {
+      collapsed.push({ role: 'user', content: [{ type: 'text', text: m.content }] });
+    }
+  }
+
+  if (collapsed.length === 0) {
+    collapsed.push({ role: 'user', content: [{ type: 'text', text: '' }] });
+  }
+
+  const body: Record<string, unknown> = {
+    model: s.model,
+    max_tokens: opts?.maxTokens ?? 8192,
+    messages: collapsed,
+    tools: anthropicTools,
+    ...(systemMsgs.length > 0
+      ? { system: systemMsgs.map((m) => m.content).join('\n\n') }
+      : {}),
+    ...(opts?.temperature !== undefined ? { temperature: opts.temperature } : {}),
+  };
+
+  const res = await fetch(`${ANTHROPIC_BASE}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': s.apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new AICallError(`Anthropic API error ${res.status}`, res.status, errText);
+  }
+
+  const json = await res.json();
+  const stopReason: string = json?.stop_reason || 'end_turn';
+  const blocks: Array<Record<string, unknown>> = Array.isArray(json?.content) ? json.content : [];
+
+  let text = '';
+  const toolCalls: ToolCall[] = [];
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      text += (block.text as string) || '';
+    } else if (block.type === 'tool_use') {
+      toolCalls.push({
+        id: block.id as string,
+        name: block.name as string,
+        args: (block.input as Record<string, unknown>) || {},
+      });
+    }
+  }
+
+  return {
+    text,
+    toolCalls,
+    finishReason:
+      stopReason === 'tool_use'
+        ? 'tool_use'
+        : stopReason === 'max_tokens'
+          ? 'max_tokens'
+          : 'stop',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point for tool-calling chat
+// ---------------------------------------------------------------------------
+
+/** Agentic chat with tool-calling support. Returns the assistant text and/or
+ *  tool calls for the current step. The caller (agent loop) is responsible
+ *  for executing tools and feeding results back. */
+export async function generateWithTools(
+  messages: AgentMessage[],
+  tools: ToolDefinition[],
+  opts?: ChatOptions,
+  settings?: AISettings,
+): Promise<AgentStepResult> {
+  const s = settings || (await getAISettings());
+  switch (s.provider) {
+    case 'gemini':
+      return callGeminiWithTools(messages, tools, opts, s);
+    case 'anthropic':
+      return callAnthropicWithTools(messages, tools, opts, s);
+    case 'openai':
+    default:
+      return callOpenAIWithTools(messages, tools, opts, s);
+  }
+}

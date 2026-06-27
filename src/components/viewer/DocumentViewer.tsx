@@ -31,7 +31,12 @@ export function DocumentViewer() {
     }
   }, [])
 
-  // Load content when document or retry changes
+  // Load content when the selected document or retry changes.
+  // NOTE: jumpTarget and pdfBlobUrl are intentionally NOT in the dependency
+  // array — jumpTarget only changes the iframe page hash (no reload needed),
+  // and pdfBlobUrl is set BY this effect (including it causes an infinite loop).
+  const loadedDocRef = useRef<string | null>(null)
+
   useEffect(() => {
     if (!selectedDocumentId) {
       setContent(null)
@@ -43,14 +48,13 @@ export function DocumentViewer() {
         blobRef.current = null
       }
       setPdfBlobUrl(null)
+      loadedDocRef.current = null
       return
     }
 
-    // If this is a jump-to-page request for a different doc, don't reload
-    // (the selection effect above already handled it). Only reload if the
-    // document actually changed (not just a page jump).
-    if (jumpTarget && jumpTarget.documentId === selectedDocumentId && pdfBlobUrl) {
-      // Already loaded this PDF — just update the page hash
+    // Skip if we already loaded this exact document (e.g. effect re-ran due
+    // to pdfBlobUrl changing — which we set ourselves).
+    if (loadedDocRef.current === selectedDocumentId && retryCount === 0) {
       return
     }
 
@@ -105,6 +109,7 @@ export function DocumentViewer() {
             setTableData(null)
           }
         }
+        loadedDocRef.current = selectedDocumentId
       } catch (err) {
         if (cancelled) return
         setError(err instanceof Error ? err.message : 'Failed to load document')
@@ -116,11 +121,12 @@ export function DocumentViewer() {
 
     loadContent()
     return () => { cancelled = true }
-  }, [selectedDocumentId, retryCount, jumpTarget, pdfBlobUrl, toast])
+  }, [selectedDocumentId, retryCount])
 
   const handleRetry = () => {
     setError(null)
     setContent(null)
+    loadedDocRef.current = null
     setRetryCount((c) => c + 1)
   }
 

@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
-import path from 'path';
-import fs from 'fs';
+import { downloadDocumentFile } from '@/lib/storage';
 
 export async function GET(
   request: NextRequest,
@@ -21,16 +20,24 @@ export async function GET(
     const project = await getOwnedProject(document.projectId, ownerId);
     if (!project) return notOwnedResponse();
 
-    const absPath = path.join(process.cwd(), document.filePath);
-    if (!fs.existsSync(absPath)) {
-      return NextResponse.json({ error: 'File not found on disk' }, { status: 404 });
+    if (!document.filePath) {
+      return NextResponse.json({ error: 'File not found in storage' }, { status: 404 });
     }
 
-    const fileBuffer = fs.readFileSync(absPath);
+    let fileBuffer: Buffer;
+    try {
+      fileBuffer = await downloadDocumentFile(document.filePath);
+    } catch (err) {
+      console.error('Failed to download document from storage:', err);
+      return NextResponse.json({ error: 'File not found in storage' }, { status: 404 });
+    }
 
-    // For PDF files, return the raw file for iframe/embed viewing
+    // For PDF files, return the raw file for iframe/embed viewing.
+    // Cast through unknown: Node's Buffer is a valid Response body at runtime
+    // but TS 5.7's generic Uint8Array<ArrayBufferLike> isn't structurally
+    // assignable to the DOM BodyInit union used by NextResponse.
     if (document.fileType === 'pdf') {
-      return new NextResponse(fileBuffer, {
+      return new NextResponse(fileBuffer as unknown as BodyInit, {
         headers: {
           'Content-Type': 'application/pdf',
           'Content-Disposition': `inline; filename="${document.filename}"`,

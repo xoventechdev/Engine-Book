@@ -4,13 +4,16 @@
  * Used by graph, report, and compare routes. Consolidates the duplicated
  * chunk-reading + file-parsing fallback logic that was copy-pasted across
  * multiple API routes.
+ *
+ * Files are stored in Supabase Storage (see `@/lib/storage`). When a
+ * document has no chunks yet, we download its bytes from storage and parse
+ * them on demand, then cache the result as chunks for future requests.
  */
 
 import { db } from '@/lib/db';
 import { extractPdfText } from '@/lib/pdf-parser';
+import { downloadDocumentFile } from '@/lib/storage';
 import type { AISettings } from '@/lib/ai';
-import path from 'path';
-import fs from 'fs';
 
 /**
  * Collect combined text from all documents in a project.
@@ -53,9 +56,8 @@ export async function collectProjectText(
     // PDF fallback: if no chunks exist and it's a PDF, OCR the file.
     if (chunks.length === 0 && doc.fileType === 'pdf') {
       try {
-        const absPath = path.join(process.cwd(), doc.filePath);
-        if (fs.existsSync(absPath)) {
-          const fileBuffer = fs.readFileSync(absPath);
+        if (doc.filePath) {
+          const fileBuffer = await downloadDocumentFile(doc.filePath);
           const pdfResult = await extractPdfText(fileBuffer, settings);
           if (pdfResult.fullText.trim()) {
             // Create chunks from the extracted text so future requests
@@ -86,9 +88,9 @@ export async function collectProjectText(
     // Non-PDF fallback: if no chunks exist and it's a non-PDF, parse the file.
     if (chunks.length === 0 && doc.fileType !== 'pdf') {
       try {
-        const absPath = path.join(process.cwd(), doc.filePath);
-        if (fs.existsSync(absPath)) {
-          const fullText = await parseNonPdfText(absPath, doc.fileType);
+        if (doc.filePath) {
+          const fileBuffer = await downloadDocumentFile(doc.filePath);
+          const fullText = await parseNonPdfText(fileBuffer, doc.fileType);
           if (fullText.trim()) {
             const { chunkText } = await import('@/lib/chunker');
             const pages = splitTextIntoPages(fullText, 3000);
@@ -125,7 +127,7 @@ export async function collectProjectText(
 
 /**
  * Extract text from a single document (used by compare route).
- * Tries chunks first, then falls back to file parsing.
+ * Tries chunks first, then falls back to parsing the stored file.
  */
 export async function extractDocumentText(
   doc: { id: string; fileType: string; filePath: string },
@@ -141,23 +143,20 @@ export async function extractDocumentText(
     return chunks.map((c) => c.text).join('\n\n');
   }
 
-  const absPath = path.join(process.cwd(), doc.filePath);
-  if (!fs.existsSync(absPath)) return '';
+  if (!doc.filePath) return '';
 
-  const fileBuffer = fs.readFileSync(absPath);
+  const fileBuffer = await downloadDocumentFile(doc.filePath);
 
   if (doc.fileType === 'pdf') {
     const pdfResult = await extractPdfText(fileBuffer, settings);
     return pdfResult.fullText;
   }
 
-  return parseNonPdfText(absPath, doc.fileType);
+  return parseNonPdfText(fileBuffer, doc.fileType);
 }
 
-/** Parse text from a non-PDF file on disk. */
-async function parseNonPdfText(absFilePath: string, fileType: string): Promise<string> {
-  const fileBuffer = fs.readFileSync(absFilePath);
-
+/** Parse text from a non-PDF file buffer (DOCX, TXT, XLSX, CSV). */
+async function parseNonPdfText(fileBuffer: Buffer, fileType: string): Promise<string> {
   if (fileType === 'docx') {
     const mammoth = await import('mammoth');
     const result = await mammoth.extractRawText({ buffer: fileBuffer });

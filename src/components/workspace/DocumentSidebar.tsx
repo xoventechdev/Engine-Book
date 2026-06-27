@@ -1,22 +1,16 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { useAppStore, type Document, type Discipline } from '@/store/useAppStore'
+import { useAppStore, type Document } from '@/store/useAppStore'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { DropZone } from '@/components/upload/DropZone'
-import { formatFileSize, getDisciplineColor, DISCIPLINES, getFileType } from '@/lib/helpers'
+import { InsightsPanel } from './InsightsPanel'
+import { formatFileSize, getFileType } from '@/lib/helpers'
 import { useToast } from '@/hooks/use-toast'
-import { FileText, FileSpreadsheet, FileType, Trash2, Upload, Filter, CheckCircle2, AlertCircle, X, Loader2 } from 'lucide-react'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { FileText, FileSpreadsheet, FileType, Trash2, Upload, CheckCircle2, AlertCircle, X, Loader2 } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
@@ -45,8 +39,6 @@ export function DocumentSidebar() {
     removeDocument,
     selectedDocumentId,
     setSelectedDocumentId,
-    disciplineFilter,
-    setDisciplineFilter,
   } = useAppStore()
   const [uploadItems, setUploadItems] = useState<UploadItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -211,10 +203,6 @@ export function DocumentSidebar() {
     }
   }
 
-  const filteredDocs = disciplineFilter === 'All'
-    ? documents
-    : documents.filter((d) => d.discipline === disciplineFilter)
-
   return (
     <div className="flex flex-col h-full border-r bg-card">
       {/* Header */}
@@ -300,27 +288,8 @@ export function DocumentSidebar() {
         </div>
       )}
 
-      {/* Discipline Filter */}
-      <div className="px-3 py-2 border-b shrink-0">
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <Filter className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">Filter</span>
-        </div>
-        <Select
-          value={disciplineFilter}
-          onValueChange={(v) => setDisciplineFilter(v as Discipline | 'All')}
-        >
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="All">All Disciplines</SelectItem>
-            {DISCIPLINES.map((d) => (
-              <SelectItem key={d} value={d}>{d}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {/* AI Insights (auto-generated when documents are present) */}
+      <InsightsPanel />
 
       {/* Document List */}
       <ScrollArea className="flex-1">
@@ -332,15 +301,15 @@ export function DocumentSidebar() {
                 <Skeleton className="h-3 w-1/2" />
               </div>
             ))
-          ) : filteredDocs.length === 0 ? (
+          ) : documents.length === 0 ? (
             <div className="text-center py-8 px-2">
               <Upload className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
               <p className="text-xs text-muted-foreground">
-                {documents.length === 0 ? 'Upload documents to get started' : 'No documents match the filter'}
+                Upload documents to get started
               </p>
             </div>
           ) : (
-            filteredDocs.map((doc) => {
+            documents.map((doc) => {
               const Icon = FILE_ICONS[doc.fileType] || FileText
               const isSelected = selectedDocumentId === doc.id
 
@@ -359,9 +328,6 @@ export function DocumentSidebar() {
                     <p className="text-sm font-medium truncate">{doc.filename}</p>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-xs text-muted-foreground">{formatFileSize(doc.fileSize)}</span>
-                      <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${getDisciplineColor(doc.discipline)}`}>
-                        {doc.discipline}
-                      </Badge>
                     </div>
                   </div>
                   <Button

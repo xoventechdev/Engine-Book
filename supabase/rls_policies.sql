@@ -9,7 +9,7 @@
 -- ALL rows in every table — bypassing the app's API routes entirely.
 --
 -- These policies ensure that via the REST API, a user can only access rows
--- belonging to projects they own (projectId → Project.ownerId = auth.uid()).
+-- belonging to projects they own (projectId → Project.ownerId = auth.uid()::text).
 --
 -- NOTE: Prisma connects as the postgres superuser which BYPASSES RLS, so the
 -- app's own API routes continue to work normally. RLS only restricts direct
@@ -59,43 +59,43 @@ ALTER TABLE "Setting"          ENABLE ROW LEVEL SECURITY;
 
 -- ---------------------------------------------------------------------------
 -- 2. Project — owner can manage their own projects
---    ownerId = auth.uid() (legacy null-owner projects are NOT accessible via REST)
+--    ownerId = auth.uid()::text (legacy null-owner projects are NOT accessible via REST)
 -- ---------------------------------------------------------------------------
 CREATE POLICY "owner_select" ON "Project"
-  FOR SELECT TO authenticated USING ("ownerId" = auth.uid());
+  FOR SELECT TO authenticated USING ("ownerId" = auth.uid()::text);
 
 CREATE POLICY "owner_insert" ON "Project"
-  FOR INSERT TO authenticated WITH CHECK ("ownerId" = auth.uid());
+  FOR INSERT TO authenticated WITH CHECK ("ownerId" = auth.uid()::text);
 
 CREATE POLICY "owner_update" ON "Project"
-  FOR UPDATE TO authenticated USING ("ownerId" = auth.uid()) WITH CHECK ("ownerId" = auth.uid());
+  FOR UPDATE TO authenticated USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
 
 CREATE POLICY "owner_delete" ON "Project"
-  FOR DELETE TO authenticated USING ("ownerId" = auth.uid());
+  FOR DELETE TO authenticated USING ("ownerId" = auth.uid()::text);
 
 -- ---------------------------------------------------------------------------
 -- 3. Document — accessible if parent project is owned by the user
 -- ---------------------------------------------------------------------------
 CREATE POLICY "doc_select" ON "Document"
   FOR SELECT TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "doc_insert" ON "Document"
   FOR INSERT TO authenticated WITH CHECK (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "doc_update" ON "Document"
   FOR UPDATE TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   ) WITH CHECK (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "doc_delete" ON "Document"
   FOR DELETE TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 -- ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ CREATE POLICY "chunk_select" ON "DocumentChunk"
     EXISTS (
       SELECT 1 FROM "Document" d
       JOIN "Project" p ON p.id = d."projectId"
-      WHERE d.id = "documentId" AND p."ownerId" = auth.uid()
+      WHERE d.id = "documentId" AND p."ownerId" = auth.uid()::text
     )
   );
 
@@ -115,7 +115,7 @@ CREATE POLICY "chunk_insert" ON "DocumentChunk"
     EXISTS (
       SELECT 1 FROM "Document" d
       JOIN "Project" p ON p.id = d."projectId"
-      WHERE d.id = "documentId" AND p."ownerId" = auth.uid()
+      WHERE d.id = "documentId" AND p."ownerId" = auth.uid()::text
     )
   );
 
@@ -124,7 +124,7 @@ CREATE POLICY "chunk_delete" ON "DocumentChunk"
     EXISTS (
       SELECT 1 FROM "Document" d
       JOIN "Project" p ON p.id = d."projectId"
-      WHERE d.id = "documentId" AND p."ownerId" = auth.uid()
+      WHERE d.id = "documentId" AND p."ownerId" = auth.uid()::text
     )
   );
 
@@ -133,17 +133,17 @@ CREATE POLICY "chunk_delete" ON "DocumentChunk"
 -- ---------------------------------------------------------------------------
 CREATE POLICY "msg_select" ON "ChatMessage"
   FOR SELECT TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "msg_insert" ON "ChatMessage"
   FOR INSERT TO authenticated WITH CHECK (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "msg_delete" ON "ChatMessage"
   FOR DELETE TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 -- ---------------------------------------------------------------------------
@@ -151,24 +151,24 @@ CREATE POLICY "msg_delete" ON "ChatMessage"
 -- ---------------------------------------------------------------------------
 CREATE POLICY "ann_select" ON "Annotation"
   FOR SELECT TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "ann_insert" ON "Annotation"
   FOR INSERT TO authenticated WITH CHECK (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "ann_update" ON "Annotation"
   FOR UPDATE TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   ) WITH CHECK (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "ann_delete" ON "Annotation"
   FOR DELETE TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 -- ---------------------------------------------------------------------------
@@ -176,17 +176,17 @@ CREATE POLICY "ann_delete" ON "Annotation"
 -- ---------------------------------------------------------------------------
 CREATE POLICY "out_select" ON "GeneratedOutput"
   FOR SELECT TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "out_insert" ON "GeneratedOutput"
   FOR INSERT TO authenticated WITH CHECK (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 CREATE POLICY "out_delete" ON "GeneratedOutput"
   FOR DELETE TO authenticated USING (
-    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid())
+    EXISTS (SELECT 1 FROM "Project" p WHERE p.id = "projectId" AND p."ownerId" = auth.uid()::text)
   );
 
 -- ---------------------------------------------------------------------------

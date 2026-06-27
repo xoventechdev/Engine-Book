@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
+import { deleteProjectFiles } from '@/lib/storage';
 
 export async function GET(
   request: NextRequest,
@@ -40,23 +41,12 @@ export async function DELETE(
     const project = await getOwnedProject(id, ownerId);
     if (!project) return notOwnedResponse();
 
-    // Delete associated documents from filesystem
-    const documents = await db.document.findMany({
-      where: { projectId: id },
-      select: { filePath: true },
-    });
-
-    const fs = await import('fs');
-    const path = await import('path');
-    for (const doc of documents) {
-      try {
-        const fullPath = path.join(process.cwd(), doc.filePath);
-        if (fs.existsSync(fullPath)) {
-          fs.unlinkSync(fullPath);
-        }
-      } catch {
-        // Ignore file deletion errors
-      }
+    // Delete associated document files from Supabase Storage
+    try {
+      await deleteProjectFiles(id);
+    } catch (err) {
+      // Non-fatal — DB cleanup still proceeds
+      console.error('Failed to delete project files from storage:', err);
     }
 
     await db.project.delete({ where: { id } });

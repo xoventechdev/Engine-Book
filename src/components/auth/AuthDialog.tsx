@@ -7,17 +7,137 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/hooks/use-toast'
 import { supabase } from '@/lib/supabase/client'
-import { Loader2, FileText, Mail, Lock, ArrowLeft } from 'lucide-react'
+import { Loader2, FileText, Mail, Lock, ArrowLeft, CheckCircle2 } from 'lucide-react'
 
-export function AuthDialog() {
+interface AuthDialogProps {
+  /** "reset" shows the "set new password" form (reached via email reset link). */
+  mode?: 'reset'
+}
+
+export function AuthDialog({ mode }: AuthDialogProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmNewPassword, setConfirmNewPassword] = useState('')
   const [loading, setLoading] = useState(false)
   // "forgot" view replaces the auth form with a password-reset form
   const [forgotMode, setForgotMode] = useState(false)
   const [forgotSent, setForgotSent] = useState(false)
+  const [passwordUpdated, setPasswordUpdated] = useState(false)
   const { toast } = useToast()
+
+  // ---- Password reset view (reached via email link) ----
+  if (mode === 'reset') {
+    const handleUpdatePassword = async () => {
+      if (!newPassword) {
+        toast({ title: 'Error', description: 'Enter a new password', variant: 'destructive' })
+        return
+      }
+      if (newPassword.length < 6) {
+        toast({ title: 'Error', description: 'Password must be at least 6 characters', variant: 'destructive' })
+        return
+      }
+      if (newPassword !== confirmNewPassword) {
+        toast({ title: 'Error', description: 'Passwords do not match', variant: 'destructive' })
+        return
+      }
+      setLoading(true)
+      try {
+        const { error } = await supabase.auth.updateUser({ password: newPassword })
+        if (error) throw error
+        setPasswordUpdated(true)
+        toast({ title: 'Password updated', description: 'You can now sign in with your new password.' })
+      } catch (err) {
+        toast({
+          title: 'Update failed',
+          description: err instanceof Error ? err.message : 'Could not update password',
+          variant: 'destructive',
+        })
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <div className="w-full max-w-sm space-y-6">
+          <div className="text-center space-y-3">
+            <div className="h-14 w-14 rounded-xl bg-emerald-600 flex items-center justify-center mx-auto">
+              <FileText className="h-7 w-7 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Set New Password</h1>
+              <p className="text-sm text-muted-foreground">Engine Book</p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-card p-6 shadow-sm space-y-4">
+            {passwordUpdated ? (
+              <div className="text-center space-y-4 py-4">
+                <CheckCircle2 className="h-10 w-10 text-emerald-500 mx-auto" />
+                <div>
+                  <p className="text-sm font-medium">Password updated successfully</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Your new password is active. You&apos;ll be redirected to sign in.
+                  </p>
+                </div>
+                <Button
+                  className="w-full gap-2"
+                  onClick={async () => {
+                    await supabase.auth.signOut()
+                    window.location.href = '/'
+                  }}
+                >
+                  Go to Sign In
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">New Password</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="new-password"
+                      type="password"
+                      placeholder="At least 6 characters"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && !loading && handleUpdatePassword()}
+                      className="pl-9"
+                      autoFocus
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirm-new-password">Confirm New Password</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="confirm-new-password"
+                      type="password"
+                      placeholder="••••••••"
+                      value={confirmNewPassword}
+                      onChange={(e) => setConfirmNewPassword(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && !loading && handleUpdatePassword()}
+                      className="pl-9"
+                    />
+                  </div>
+                </div>
+                <Button onClick={handleUpdatePassword} disabled={loading} className="w-full gap-2">
+                  {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Update Password
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ---- Forgot-password view ----
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {

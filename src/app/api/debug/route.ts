@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getOwnerId, getOwnedProject, claimLegacyProjects, unauthenticatedResponse } from '@/lib/owner';
-import path from 'path';
-import fs from 'fs';
+import { documentFileExists } from '@/lib/storage';
 
 /**
  * Debug endpoint to diagnose document processing pipeline
@@ -40,21 +39,26 @@ export async function GET(request: NextRequest) {
         orderBy: { createdAt: 'desc' },
       });
 
-      debug.projects = projects.map(p => ({
-        id: p.id,
-        name: p.name,
-        documentsCount: p._count.documents,
-        chatCount: p._count.chatMessages,
-        documents: p.documents.map(d => ({
-          id: d.id,
-          filename: d.filename,
-          fileType: d.fileType,
-          fileSize: d.fileSize,
-          filePath: d.filePath,
-          fileExists: fs.existsSync(path.join(process.cwd(), d.filePath)),
-          chunkCount: d._count.chunks,
-        })),
-      }));
+      const projectsOut = await Promise.all(
+        projects.map(async (p) => ({
+          id: p.id,
+          name: p.name,
+          documentsCount: p._count.documents,
+          chatCount: p._count.chatMessages,
+          documents: await Promise.all(
+            p.documents.map(async (d) => ({
+              id: d.id,
+              filename: d.filename,
+              fileType: d.fileType,
+              fileSize: d.fileSize,
+              filePath: d.filePath,
+              fileExists: d.filePath ? await documentFileExists(d.filePath).catch(() => false) : false,
+              chunkCount: d._count.chunks,
+            }))
+          ),
+        }))
+      );
+      debug.projects = projectsOut;
 
       return NextResponse.json(debug);
     }
@@ -107,22 +111,24 @@ export async function GET(request: NextRequest) {
       documentCount: project.documents.length,
     };
 
-    debug.documents = project.documents.map(d => ({
-      id: d.id,
-      filename: d.filename,
-      fileType: d.fileType,
-      fileSize: d.fileSize,
-      filePath: d.filePath,
-      fileExists: fs.existsSync(path.join(process.cwd(), d.filePath)),
-      chunkCount: d._count.chunks,
-      chunksPreview: (chunksByDoc.get(d.id) || []).slice(0, 2).map(c => ({
-        chunkIndex: c.chunkIndex,
-        pageNumber: c.pageNumber,
-        textLength: c.text.length,
-        preview: c.text.slice(0, 150),
-      })),
-    }));
-
+    const documentsOut = await Promise.all(
+      project.documents.map(async (d) => ({
+        id: d.id,
+        filename: d.filename,
+        fileType: d.fileType,
+        fileSize: d.fileSize,
+        filePath: d.filePath,
+        fileExists: d.filePath ? await documentFileExists(d.filePath).catch(() => false) : false,
+        chunkCount: d._count.chunks,
+        chunksPreview: (chunksByDoc.get(d.id) || []).slice(0, 2).map(c => ({
+          chunkIndex: c.chunkIndex,
+          pageNumber: c.pageNumber,
+          textLength: c.text.length,
+          preview: c.text.slice(0, 150),
+        })),
+      }))
+    );
+    debug.documents = documentsOut;
     debug.totalChunks = allChunks.length;
 
     return NextResponse.json(debug);
