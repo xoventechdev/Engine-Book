@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { parseAISettings, AIConfigError } from '@/lib/ai';
 import { getOwnerId, getOwnedProject, notOwnedResponse, unauthenticatedResponse } from '@/lib/owner';
-import { runMultiAgent } from '@/lib/agent/multi-agent';
+import { runAgent } from '@/lib/agent/loop';
 
 // GET: Fetch chat history
 export async function GET(request: NextRequest) {
@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Send a chat message (agentic workflow)
+// POST: Send a chat message (single agentic workflow)
 export async function POST(request: NextRequest) {
   try {
     const { projectId, message, settings: bodySettings } = await request.json();
@@ -63,10 +63,9 @@ export async function POST(request: NextRequest) {
       content: msg.content,
     }));
 
-    // Run the multi-agent pipeline:
-    //   Researcher (gathers info via tools) → Fact-Checker (verifies citations
-    //   via tools) → Synthesizer (produces the final verified answer)
-    const { response: aiResponse, phases, toolCallLog } = await runMultiAgent(
+    // Run the single agentic loop: the LLM plans → calls tools (list/search/read
+    // documents) → observes results → produces a final cited answer.
+    const { response: aiResponse, toolCallLog } = await runAgent(
       message,
       history,
       { projectId, ownerId, settings: await settings },
@@ -102,13 +101,6 @@ export async function POST(request: NextRequest) {
       createdAt: assistantMessage.createdAt,
       hasContext: toolCallLog.length > 0,
       toolCalls: toolCallLog,
-      phases,
-      debug: {
-        agentPhases: phases.map((p) => ({ role: p.role, label: p.label, toolCount: p.toolCalls.length })),
-        toolsUsed: [...new Set(toolCallLog.map((t) => t.tool))],
-        totalDocumentsSearched: toolCallLog.filter((t) => t.tool === 'search_documents').length,
-        totalDocumentsRead: toolCallLog.filter((t) => t.tool === 'read_document').length,
-      },
     });
   } catch (error) {
     console.error('[CHAT] FATAL ERROR:', error);

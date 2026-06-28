@@ -41,13 +41,6 @@ export interface ToolCallLogEntry {
   resultSummary: string;
 }
 
-export interface AgentPhaseLog {
-  role: 'researcher' | 'fact-checker' | 'synthesizer';
-  label: string;
-  toolCalls: ToolCallLogEntry[];
-  output: string;
-}
-
 export interface ChatMessage {
   id: string;
   projectId: string;
@@ -55,7 +48,6 @@ export interface ChatMessage {
   content: string;
   citations: Citation[] | null;
   toolCalls?: ToolCallLogEntry[] | null;
-  phases?: AgentPhaseLog[] | null;
   createdAt: string;
 }
 

@@ -74,29 +74,3 @@ export interface ToolCallLogEntry {
   /** First ~200 chars of the tool result, for a quick preview in the UI. */
   resultSummary: string;
 }
-
-// ===========================================================================
-// Multi-agent types
-// ===========================================================================
-
-/** The three specialized agent roles in the multi-agent pipeline. */
-export type AgentRole = 'researcher' | 'fact-checker' | 'synthesizer';
-
-/** Log of one agent phase in the multi-agent pipeline — for the UI. */
-export interface AgentPhaseLog {
-  role: AgentRole;
-  label: string;
-  toolCalls: ToolCallLogEntry[];
-  /** What this agent produced (draft answer, verification report, or final answer). */
-  output: string;
-}
-
-/** Result of the full multi-agent pipeline. */
-export interface MultiAgentResult {
-  /** The final synthesized answer (with verified citations). */
-  response: string;
-  /** Per-phase logs — lets the UI show each agent's work separately. */
-  phases: AgentPhaseLog[];
-  /** Flat tool-call log (all phases combined) — backward compat with the UI. */
-  toolCallLog: ToolCallLogEntry[];
-}

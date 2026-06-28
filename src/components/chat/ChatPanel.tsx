@@ -118,7 +118,6 @@ export function ChatPanel() {
         content: data.content,
         citations: data.citations || null,
         toolCalls: data.toolCalls || null,
-        phases: data.phases || null,
         createdAt: data.createdAt,
       })
       // Store debug info if available
@@ -272,7 +271,6 @@ export function ChatPanel() {
               content={msg.content}
               citations={msg.citations}
               toolCalls={msg.toolCalls}
-              phases={msg.phases}
               onCitationClick={handleCitationClick}
               onPin={msg.role === 'assistant' ? handlePinMessage : undefined}
             />
@@ -290,7 +288,7 @@ export function ChatPanel() {
                     <span className="w-2 h-2 bg-violet-500/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                     <span className="w-2 h-2 bg-violet-500/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
-                  <span className="text-[10px] text-muted-foreground">Agent team researching &amp; fact-checking...</span>
+                  <span className="text-[10px] text-muted-foreground">Agent researching...</span>
                 </div>
               </div>
             </div>
