@@ -8,7 +8,14 @@ export async function GET() {
     if (!ownerId) return unauthenticatedResponse();
 
     // Claim legacy (null-owner) projects for this browser on first load.
-    await claimLegacyProjects(ownerId);
+    // Best-effort: if the pooler drops the connection mid-claim, we still
+    // want to return the user's existing projects instead of failing the
+    // whole request.
+    try {
+      await claimLegacyProjects(ownerId);
+    } catch (claimErr) {
+      console.warn('[projects] claimLegacyProjects failed (non-fatal):', claimErr);
+    }
 
     const projects = await db.project.findMany({
       where: ownerId ? { ownerId } : {},
